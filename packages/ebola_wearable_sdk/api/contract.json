@@ -1,0 +1,16 @@
+{
+  "name": "EBOLA Wearable Service API",
+  "version": "0.1.0-draft",
+  "note": "API contract only. These are proposed endpoints, not deployed services.",
+  "auth": "existing EBOLA user identity + short-lived scoped mobile token",
+  "endpoints": [
+    {"method":"GET","path":"/api/wearable/v1/capabilities","purpose":"Authenticated user/device capability summary"},
+    {"method":"POST","path":"/api/wearable/v1/media/initiate","purpose":"Create scoped encrypted Vault upload session"},
+    {"method":"POST","path":"/api/wearable/v1/media/complete","purpose":"Commit verified media reference into Secure Vault"},
+    {"method":"POST","path":"/api/wearable/v1/ai/ask","purpose":"KRISHNA multimodal request and agent action routing"},
+    {"method":"GET","path":"/api/wearable/v1/jobs/{id}","purpose":"Read user-owned agent job status"},
+    {"method":"POST","path":"/api/wearable/v1/memory/mark-important","purpose":"Explicit authorized memory checkpoint"},
+    {"method":"POST","path":"/api/wearable/v1/devices/revoke","purpose":"Revoke a paired device session"}
+  ],
+  "required": ["user-bound auth", "per-device consent", "idempotency key for writes", "audit trail", "rate limits", "no third-party OEM cloud in EBOLA paths", "encrypted canonical media storage"]
+}

@@ -1,0 +1,29 @@
+name: EBOLA Wearable SDK CI
+on:
+  push:
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/dart-sdk-ci.yml'
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dart-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Resolve dependencies
+        run: dart pub get
+      - name: Analyze (errors only)
+        run: dart analyze --fatal-infos=false --fatal-warnings=false
+      - name: Run all unit tests
+        run: dart test --reporter expanded
+      - name: Exercise mock SDK
+        run: dart run example/bin/demo.dart

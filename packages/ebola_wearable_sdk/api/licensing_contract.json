@@ -1,0 +1,33 @@
+{
+  "status": "PROPOSED CONTRACT - NOT LIVE",
+  "authentication": "Existing EBOLA authenticated account; no client-held signing secrets",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/wearables/license/activate",
+      "requires": "user session, attested device ID, inventory ownership"
+    },
+    {
+      "method": "POST",
+      "path": "/api/wearables/license/validate",
+      "requires": "user session and device binding"
+    },
+    {
+      "method": "POST",
+      "path": "/api/wearables/license/deactivate",
+      "requires": "user session or authorized admin"
+    },
+    {
+      "method": "POST",
+      "path": "/api/wearables/license/replace",
+      "requires": "approved warranty case and atomic revocation/binding"
+    }
+  ],
+  "invariants": [
+    "Only one ACTIVE device binding per licence",
+    "No simultaneous use on replacement",
+    "No account, sponsor, or Vault migration",
+    "Warranty expiry normally unchanged by replacement",
+    "Audit every activation and transfer"
+  ]
+}

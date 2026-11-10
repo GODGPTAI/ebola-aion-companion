@@ -1,0 +1,22 @@
+name: ebola_aion_companion
+description: EBOLA AION companion app for G1–G4 wearable models; safe mock-first foundation.
+publish_to: none
+version: 0.1.0+1
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  ebola_wearable_sdk:
+    path: packages/ebola_wearable_sdk
+  url_launcher: ^6.3.1
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/EBOLA.png
+    - assets/images/g3.png
+    - assets/images/g4.png
