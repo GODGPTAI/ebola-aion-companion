@@ -1,32 +1,36 @@
+
 name: EBOLA AION Android APK
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+
       - name: Generate Android runner
         run: flutter create --platforms=android --project-name ebola_aion_companion --org com.godgptai .
-      
+
       - name: Configure G2 Bluetooth permissions
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
-          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
           text = manifest.read_text()
-if "<application" not in text:
-    raise SystemExit("AndroidManifest.xml application tag missing")
+          if '<application' not in text:
+              raise SystemExit('AndroidManifest.xml application tag missing')
           permissions = '''
               <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
@@ -34,28 +38,32 @@ if "<application" not in text:
               <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>
           '''
-
-          text = text.replace(
-              "<application",
-              permissions + "\n    <application",
-              1
-          )
-          manifest.write_text(text)
-          print("G2 Bluetooth permissions added")
+          if 'android.permission.BLUETOOTH_SCAN' not in text:
+              text = text.replace(
+                  '<application',
+                  permissions + '\n    <application',
+                  1
+              )
+              manifest.write_text(text)
+          print('G2 Android Bluetooth permissions configured')
           PY
 
       - name: Install dependencies
         run: flutter pub get
+
       - name: Analyze
         run: flutter analyze lib test --no-fatal-warnings --no-fatal-infos
+
       - name: Widget tests
         run: flutter test
-      - name: Build APK (debug, development only)
+
+      - name: Build G2 Test APK
         run: flutter build apk --debug --target=lib/g2_test_main.dart
-      - name: Upload APK artifact
+
+      - name: Upload G2 Test APK
         uses: actions/upload-artifact@v4
         with:
-          name: EBOLA-AION-Companion-Android-Debug-APK
+          name: EBOLA-AION-G2-Real-BLE-Test-APK
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
