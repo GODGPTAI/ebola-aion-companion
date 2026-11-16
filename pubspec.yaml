@@ -10,6 +10,8 @@ dependencies:
   ebola_wearable_sdk:
     path: packages/ebola_wearable_sdk
   url_launcher: ^6.3.1
+    flutter_blue_plus: ^1.35.5
+  permission_handler: ^11.3.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
