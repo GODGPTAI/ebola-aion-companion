@@ -17,6 +17,33 @@ jobs:
           cache: true
       - name: Generate Android runner
         run: flutter create --platforms=android --project-name ebola_aion_companion --org com.godgptai .
+      
+      - name: Configure G2 Bluetooth permissions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text()
+if "<application" not in text:
+    raise SystemExit("AndroidManifest.xml application tag missing")
+          permissions = '''
+              <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN"/>
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>
+          '''
+
+          text = text.replace(
+              "<application",
+              permissions + "\n    <application",
+              1
+          )
+          manifest.write_text(text)
+          print("G2 Bluetooth permissions added")
+          PY
+
       - name: Install dependencies
         run: flutter pub get
       - name: Analyze
