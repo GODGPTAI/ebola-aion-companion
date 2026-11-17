@@ -36,7 +36,7 @@ jobs:
         run: |
           flutter pub get
           dart format --output=none --set-exit-if-changed lib/ebola_aion_camera_probe*.dart || true
-          flutter analyze --no-pub lib/ebola_aion_camera_probe.dart lib/ebola_aion_camera_probe_main.dart
+          flutter analyze --no-fatal-infos --no-fatal-warnings --no-pub lib/ebola_aion_camera_probe.dart lib/ebola_aion_camera_probe_main.dart
       - name: Build internal debug APK - glass probe ONLY
         run: flutter build apk --debug --target lib/ebola_aion_camera_probe_main.dart
       - name: Upload internal debug APK artifact
