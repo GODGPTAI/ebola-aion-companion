@@ -1,0 +1,48 @@
+﻿name: EBOLA AION Glass Camera - Internal Debug APK
+on:
+  workflow_dispatch:
+    inputs:
+      license_approved:
+        description: 'I have reviewed third-party licence obligations and authorize INTERNAL evaluation build only'
+        type: boolean
+        required: true
+        default: false
+permissions:
+  contents: read
+jobs:
+  debug-apk:
+    if: ${{ inputs.license_approved == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Prepare missing Android scaffold
+        run: |
+          flutter --version
+          flutter create --platforms=android --project-name ebola_aion_companion .
+      - name: Add hardware plugin to internal test build only
+        run: flutter pub add moyoung_glasses_ble_plugin:1.4.0
+      - name: Android configuration
+        run: python3 scripts/prepare_android.py .
+      - name: Resolve & analyze
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed lib/ebola_aion_camera_probe*.dart || true
+          flutter analyze --no-pub lib/ebola_aion_camera_probe.dart lib/ebola_aion_camera_probe_main.dart
+      - name: Build internal debug APK - glass probe ONLY
+        run: flutter build apk --debug --target lib/ebola_aion_camera_probe_main.dart
+      - name: Upload internal debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EBOLA-AION-GLASS-CAMERA-DEBUG-APK
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 3
