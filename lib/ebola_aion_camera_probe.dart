@@ -68,9 +68,6 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
       _subscriptions.add(_device.actionResultEveStm.listen((dynamic event) {
         _log('Device action result: ${event['action']} code=${event['code']}');
       }, onError: (Object err) => _log('Action stream error: $err')));
-      _subscriptions.add(_device.mediaDownloadProgress.listen((dynamic progress) {
-        _log('Media download stage: ${progress['stage']}');
-      }, onError: (Object err) => _log('Media stream error: $err')));
       _subscriptions.add(_device.aiImageDataEveStm.listen((dynamic image) {
         _log('AI image event received (content not logged)');
       }, onError: (Object err) => _log('AI image stream error: $err')));
@@ -91,8 +88,8 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
   Future<void> _connect() async {
     await _run('Connect', () async {
       if (!_ready || _selected == null) throw StateError('Select discovered glass');
-      final result = await _device.connect(jsonEncode({'address': _selected}));
-      setState(() => _connected = result == true);
+      await _device.connect(ConnectBean(address: _selected!));
+      _log('Connection request submitted; awaiting device state');
       _log(_connected ? 'GLASS CONNECTED' : 'CONNECTION FAILED');
     });
   }
