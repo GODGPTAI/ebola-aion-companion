@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 // EBOLA AION - development-only hardware camera probe.
 // UI branding is EBOLA AION. Third-party dependency identity must remain in
@@ -106,6 +107,8 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
       }
       _log('Sending physical glass photo command');
       await _device.takePhoto(photoMode: 0);
+      await SystemSound.play(SystemSoundType.click);
+      _log('PHONE SHUTTER CLICK REQUESTED');
       _log('PHOTO COMMAND SENT; capture and import NOT yet verified');
     });
   }
