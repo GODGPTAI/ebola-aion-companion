@@ -8,6 +8,8 @@ environment:
   sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
+
+  webview_flutter: ^4.10.0
   flutter:
     sdk: flutter
   ebola_wearable_sdk:

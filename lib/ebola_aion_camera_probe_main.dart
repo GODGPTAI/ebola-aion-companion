@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
-import 'ebola_aion_camera_probe.dart';
-
-void main() => runApp(const MaterialApp(home: EbolaAionCameraProbe()));
+// EBOLA AION camera workflow entrypoint with red-white dashboard.
+import 'ebola_aion_red_white_app.dart' as dashboard;
+void main() => dashboard.main();
