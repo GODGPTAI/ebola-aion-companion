@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 // EBOLA AION - development-only hardware camera probe.
 // UI branding is EBOLA AION. Third-party dependency identity must remain in
@@ -100,6 +101,37 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
     });
   }
 
+    Future<void> _rawBleScan() async {
+    await _run('Raw BLE scan', () async {
+      final seen = <String>{};
+      StreamSubscription<List<ScanResult>>? subscription;
+      try {
+        _log('RAW BLE SCAN STARTED (12 seconds, read-only)');
+        subscription = FlutterBluePlus.onScanResults.listen(
+          (results) {
+            for (final result in results) {
+              final id = result.device.remoteId.toString();
+              if (!seen.add(id)) continue;
+              final adv = result.advertisementData;
+              final name = adv.advName.isNotEmpty
+                  ? adv.advName
+                  : (result.device.platformName.isNotEmpty
+                      ? result.device.platformName
+                      : '(unnamed)');
+              _log('RAW BLE FOUND name=$name id=$id rssi=${result.rssi} '
+                  'services=${adv.serviceUuids.join(',')}');
+            }
+          },
+          onError: (Object error) => _log('RAW BLE STREAM ERROR: $error'),
+        );
+        await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
+        await Future<void>.delayed(const Duration(seconds: 13));
+        _log('RAW BLE SCAN COMPLETE; unique devices=${seen.length}');
+      } finally {
+        await subscription?.cancel();
+      }
+    });
+  }
   Future<void> _photo() async {
     await _run('Glass photo', () async {
       if (!_connected || !_cameraConsent) {
@@ -159,6 +191,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
           items: _found.entries.map((e) => DropdownMenuItem(value: e.key,
             child: Text(e.value.isEmpty ? 'EBOLA AION Glass' : e.value))).toList(),
           onChanged: (v) => setState(() => _selected = v)),
+        FilledButton(onPressed: _busy || !_ready ? null : _rawBleScan, child: const Text('RAW BLE SCAN: 12 seconds')),
         FilledButton(onPressed: _busy || _selected == null ? null : _connect, child: const Text('3. Connect Glass')),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _photo,
           child: const Text('4. SHOOT PHOTO — GLASS CAMERA')),
