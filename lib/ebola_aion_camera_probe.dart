@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import 'package:permission_handler/permission_handler.dart';
 // EBOLA AION - development-only hardware camera probe.
 // UI branding is EBOLA AION. Third-party dependency identity must remain in
@@ -24,8 +25,16 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
   String? _selected;
   bool _ready = false;
   bool _connected = false;
+  // EBOLA_V03_DEVICE_DASH_V1 â€” local diagnostic state, not OEM authentication.
+  String _batteryReport = 'Not queried';
+  String _lastBleCandidate = 'None detected';
+  int _rawBleCount = 0;
   bool _busy = false;
   bool _cameraConsent = false;
+  // EBOLA_V03_VOICE_VIDEO_V1: local UI state, NOT device capture acknowledgement.
+  final SpeechToText _speech = SpeechToText();
+  bool _voiceListening = false;
+  bool _videoCommandSent = false;
 
   void _log(String message) {
     if (!mounted) return;
@@ -118,6 +127,12 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
                   : (result.device.platformName.isNotEmpty
                       ? result.device.platformName
                       : '(unnamed)');
+              if (mounted && (name.toLowerCase().contains('v03') ||
+                  name.toLowerCase().contains('glass') ||
+                  name.toLowerCase().contains('jl') ||
+                  name.toLowerCase().contains('ai'))) {
+                setState(() => _lastBleCandidate = '$name / RSSI ${result.rssi}');
+              }
               _log('RAW BLE FOUND name=$name id=$id rssi=${result.rssi} '
                   'services=${adv.serviceUuids.join(',')}');
             }
@@ -126,9 +141,101 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
         );
         await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
         await Future<void>.delayed(const Duration(seconds: 13));
+        if (mounted) setState(() => _rawBleCount = seen.length);
         _log('RAW BLE SCAN COMPLETE; unique devices=${seen.length}');
       } finally {
         await subscription?.cancel();
+      }
+    });
+  }
+  // Device ACK and actual saved media must be verified separately.
+  Future<void> _startGlassVideo() async {
+    await _run('Start glasses video', () async {
+      if (!_connected || !_cameraConsent) {
+        throw StateError('Connect glasses and enable camera consent first');
+      }
+      await _device.startVideo(duration: 60);
+      if (mounted) setState(() => _videoCommandSent = true);
+      _log('VIDEO START COMMAND SENT; firmware recording NOT yet confirmed');
+    });
+  }
+
+  Future<void> _stopGlassVideo() async {
+    await _run('Stop glasses video', () async {
+      if (!_connected || !_cameraConsent) {
+        throw StateError('Connect glasses and enable camera consent first');
+      }
+      await _device.stopVideo();
+      if (mounted) setState(() => _videoCommandSent = false);
+      _log('VIDEO STOP COMMAND SENT; imported file NOT yet verified');
+    });
+  }
+
+  Future<void> _voiceCommand() async {
+    if (_busy || _voiceListening) return;
+    if (!_connected || !_cameraConsent) {
+      _log('VOICE: first connect camera-capable BLE device and allow consent');
+      return;
+    }
+    try {
+      final available = await _speech.initialize(
+        onError: (error) {
+          _log('VOICE ERROR: $error');
+          if (mounted) setState(() => _voiceListening = false);
+        },
+        onStatus: (status) {
+          _log('VOICE STATUS: $status');
+          if (status == 'done' || status == 'notListening') {
+            if (mounted) setState(() => _voiceListening = false);
+          }
+        },
+      );
+      if (!available) { _log('VOICE recognizer unavailable on this phone'); return; }
+      if (mounted) setState(() => _voiceListening = true);
+      _log('VOICE: say take photo / start video / stop video');
+      await _speech.listen(
+        listenFor: const Duration(seconds: 12),
+        pauseFor: const Duration(seconds: 3),
+        onResult: (result) {
+          if (!result.finalResult) return;
+          final words = result.recognizedWords.toLowerCase().trim();
+          _log('VOICE heard: $words');
+          _speech.stop();
+          if (mounted) setState(() => _voiceListening = false);
+          if (words.contains('photo') || words.contains('picture') || words.contains('à¤«à¥‹à¤Ÿà¥‹')) {
+            _photo();
+          } else if (words.contains('stop') && (words.contains('video') || words.contains('record')) || words.contains('à¤µà¥€à¤¡à¤¿à¤¯à¥‹ à¤¬à¤‚à¤¦')) {
+            _stopGlassVideo();
+          } else if ((words.contains('start') || words.contains('record') || words.contains('shoot')) && words.contains('video') || words.contains('à¤µà¥€à¤¡à¤¿à¤¯à¥‹ à¤šà¤¾à¤²à¥‚')) {
+            _startGlassVideo();
+          } else if (words.contains('camera on') || words.contains('camera open')) {
+            _log('Camera ready only after BLE connect; no continuous preview API verified');
+          } else if (words.contains('led') || words.contains('light off')) {
+            _log('Hardware privacy LED is firmware-controlled; no LED override');
+          } else {
+            _log('Voice command not recognized as photo/video action');
+          }
+        },
+      );
+    } catch (error) {
+      _log('VOICE COMMAND FAILED: $error');
+      if (mounted) setState(() => _voiceListening = false);
+    }
+  }
+  Future<void> _refreshGlassBattery() async {
+    await _run('Read glass battery', () async {
+      if (!_connected) {
+        _log('BATTERY: Camera BLE connection is not ready; Android audio battery is separate');
+        if (mounted) setState(() => _batteryReport = 'Camera BLE not connected');
+        return;
+      }
+      try {
+        final battery = await _device.queryBattery();
+        if (mounted) setState(() => _batteryReport = battery.toString());
+        _log('OEM BATTERY RESPONSE: $battery');
+      } catch (error) {
+        if (mounted) setState(() => _batteryReport = 'Read failed');
+        _log('OEM BATTERY READ FAILED: $error');
       }
     });
   }
@@ -172,6 +279,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
 
   @override
   void dispose() {
+    _speech.cancel();
     for (final subscription in _subscriptions) { subscription.cancel(); }
     super.dispose();
   }
@@ -191,14 +299,41 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
           items: _found.entries.map((e) => DropdownMenuItem(value: e.key,
             child: Text(e.value.isEmpty ? 'EBOLA AION Glass' : e.value))).toList(),
           onChanged: (v) => setState(() => _selected = v)),
-        FilledButton(onPressed: _busy || !_ready ? null : _rawBleScan, child: const Text('RAW BLE SCAN: 12 seconds')),
+        Card(
+          color: const Color(0xFFFFF7F7),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('EBOLA AION  |  DEVICE COMMAND CENTRE',
+                style: TextStyle(color: Color(0xFFB71C1C), fontSize: 17, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Text('Camera BLE: ${_connected ? "Connected (SDK report)" : "Not connected"}'),
+              Text('Nearby BLE devices: $_rawBleCount'),
+              Text('Candidate (not authenticated): $_lastBleCandidate'),
+              Text('Camera BLE battery: $_batteryReport'),
+              const Text('Phone Bluetooth audio and Camera BLE are separate connections.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF666666))),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _busy || !_connected ? null : _refreshGlassBattery,
+                icon: const Icon(Icons.battery_full),
+                label: const Text('READ GLASSES BATTERY'),
+              ),
+            ]),
+          ),
+        ),FilledButton(onPressed: _busy || !_ready ? null : _rawBleScan, child: const Text('RAW BLE SCAN: 12 seconds')),
         FilledButton(onPressed: _busy || _selected == null ? null : _connect, child: const Text('3. Connect Glass')),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _photo,
           child: const Text('4. SHOOT PHOTO — GLASS CAMERA')),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _importMedia,
           child: const Text('5. Download Glass Photo / Video')),
-        const SizedBox(height: 12),
-        const Text('Video start/stop and production Vault upload: NOT YET ENABLED.'),
+        FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _voiceCommand,
+          child: Text(_voiceListening ? 'VOICE LISTENING...' : 'VOICE: TAKE PHOTO / START VIDEO / STOP VIDEO')),
+        FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _startGlassVideo,
+          child: const Text('START GLASS VIDEO (up to 60 s request)')),
+        FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _stopGlassVideo,
+          child: const Text('STOP GLASS VIDEO')),        const SizedBox(height: 12),
+        const Text('Voice/photo/video are device commands, not proof of capture. Production Vault upload NOT ENABLED. LED is firmware controlled.'),
         const Divider(),
         const Text('Device diagnostics', style: TextStyle(fontWeight: FontWeight.bold)),
         for (final event in _events) SelectableText(event, style: const TextStyle(fontSize: 12)),

@@ -35,3 +35,16 @@ print('PASS Android manifest well-formed')
 print('PASS required BLE/WiFi/Internet permissions present')
 print('PASS minSdkVersion 24 set:', ', '.join(found))
 print('NOTE: Android 12+ Bluetooth permissions still require runtime consent in app.')
+
+# EBOLA_V03_VOICE_AUDIO_PERMISSION_V1 â€” Android speech recognizer consent.
+from pathlib import Path as _EbolaPath
+_ebola_android_manifest = _EbolaPath('android/app/src/main/AndroidManifest.xml')
+if _ebola_android_manifest.exists():
+    _ebola_manifest_text = _ebola_android_manifest.read_text(encoding='utf-8')
+    if 'android.permission.RECORD_AUDIO' not in _ebola_manifest_text:
+        _ebola_manifest_text = _ebola_manifest_text.replace(
+            '<manifest', '<manifest', 1
+        ).replace(
+            '<application', '<uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <application', 1
+        )
+        _ebola_android_manifest.write_text(_ebola_manifest_text, encoding='utf-8')
