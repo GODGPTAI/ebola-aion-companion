@@ -104,6 +104,10 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
   Future<void> _connect() async {
     await _run('Connect', () async {
       if (!_ready || _selected == null) throw StateError('Select discovered glass');
+        final model = (_found[_selected] ?? '').toLowerCase();
+        if (model.contains('aimb') || model.contains('g2pro')) {
+          throw StateError('AIMB-G2 Pro discovered, but DZZ camera protocol is not verified. Bluetooth audio remains available.');
+        }
       await _device.connect(ConnectBean(address: _selected!));
       _log('Connection request submitted; awaiting device state');
       _log(_connected ? 'GLASS CONNECTED' : 'CONNECTION FAILED');
@@ -133,7 +137,15 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
                   name.toLowerCase().contains('ai'))) {
                 setState(() => _lastBleCandidate = '$name / RSSI ${result.rssi}');
               }
-              _log('RAW BLE FOUND name=$name id=$id rssi=${result.rssi} '
+              // EBOLA_RAW_BLE_SELECTION_V2: advertisement discovery, not OEM authentication.
+              if (name.toLowerCase().contains('v03') ||
+                  name.toLowerCase().contains('aimb') ||
+                  name.toLowerCase().contains('g2pro')) {
+                if (mounted) setState(() {
+                  _found[id] = name;
+                });
+                _log('GLASS CANDIDATE AVAILABLE: $name (select in dropdown; camera connection not proven)');
+              }_log('RAW BLE FOUND name=$name id=$id rssi=${result.rssi} '
                   'services=${adv.serviceUuids.join(',')}');
             }
           },

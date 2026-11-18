@@ -300,6 +300,36 @@ class _WebPage extends StatefulWidget {
   @override State<_WebPage> createState()=>_WebPageState();
 }
 class _WebPageState extends State<_WebPage> {
+  // EBOLA_WEBVIEW_MOBILE_FIT_V2: presentation-only; never changes ebolape.com server.
+  bool _fitToScreen = true;
+  Future<void> _applyFitToScreen() async {
+    if (!_fitToScreen) return;
+    try {
+      await _controller.runJavaScript(r'''(function() {
+        var meta = document.querySelector('meta[name="viewport"]');
+        if (!meta) {
+          meta = document.createElement('meta');
+          meta.setAttribute('name','viewport');
+          document.head.appendChild(meta);
+        }
+        meta.setAttribute('content','width=device-width, initial-scale=1.0');
+        var s = document.getElementById('ebola-app-mobile-fit');
+        if (!s) { s=document.createElement('style'); s.id='ebola-app-mobile-fit'; document.head.appendChild(s); }
+        s.textContent = 'html,body{margin-left:0!important;margin-right:0!important;} img,video{max-width:100%!important;height:auto!important;}';
+        document.body.style.zoom='1';
+        document.body.style.width='';
+        var width = Math.max(document.body.scrollWidth,document.documentElement.scrollWidth);
+        var view = document.documentElement.clientWidth || window.innerWidth;
+        if (width > view + 4 && view > 0) {
+          var factor = Math.max(0.28,Math.min(1,view/width));
+          document.body.style.width=width+'px';
+          document.body.style.zoom=String(factor);
+        }
+      })();''');
+    } catch (error) {
+      debugPrint('EBOLAPE mobile fit unavailable: $error');
+    }
+  }
   late final WebViewController _controller;
   bool _loading=true;
   String? _error;
@@ -309,7 +339,7 @@ class _WebPageState extends State<_WebPage> {
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted:(_){if(mounted)setState((){_loading=true;_error=null;});},
-        onPageFinished:(_){if(mounted)setState(()=>_loading=false);},
+        onPageFinished:(_){if(mounted)setState(()=>_loading=false); _applyFitToScreen();},
         onWebResourceError:(e){if(e.isForMainFrame == true && mounted){
           setState((){_error=e.description;_loading=false;});
         }},
@@ -318,6 +348,9 @@ class _WebPageState extends State<_WebPage> {
   }
   @override Widget build(BuildContext context)=>Scaffold(
     appBar:AppBar(title:Text(widget.title),actions:[
+      IconButton(tooltip:'Fit website to phone width',
+        icon:Icon(_fitToScreen ? Icons.fit_screen : Icons.zoom_out_map),
+        onPressed:(){ setState(()=>_fitToScreen = !_fitToScreen); _controller.reload(); }),
       IconButton(icon:const Icon(Icons.refresh),onPressed:()=>_controller.reload())]),
     body:Stack(children:[
       WebViewWidget(controller:_controller),
