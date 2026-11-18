@@ -1,3 +1,5 @@
+import 'ebola_my_ai_account_screen.dart'; // EBOLA_MY_AI_ACCOUNT_V1
+import 'ebola_aion_home_v2.dart'; // EBOLA_HOME_V2_WIRED
 // EBOLA AION / EBOLAPE — Red & White Companion Shell
 // UI integration module. It does not claim OEM device connection or encryption.
 // Device operations remain in the existing EbolaAionCameraProbe widget.
@@ -77,7 +79,13 @@ class _ShellState extends State<_Shell> {
   }
   @override Widget build(BuildContext context) {
     final pages = [
-      _devicePage(), _commercePage(), _studioPage(), _vaultPage(),
+      EbolaAionHomeV2(
+        onGlasses: _openCamera,
+        onMainchat: () => _web('EBOLA AI', 'https://www.ebolascan.online/mainchatbar.php'),
+        onDashboard: () => _web('Dashboard', 'https://www.ebolascan.online/dashboard.php'),
+        onService: _homeService,
+        sessionDuration: _fmt(_duration),
+      ), _commercePage(), _studioPage(), _vaultPage(),
     ];
     return Scaffold(
       appBar: AppBar(toolbarHeight: 74, titleSpacing: 14,
@@ -115,6 +123,36 @@ class _ShellState extends State<_Shell> {
     );
   }
 
+  void _openMyAiAccount() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const EbolaMyAiAccountScreen()));
+  }
+
+  void _homeService(String title) {
+    if (title == 'My AI Account') { _openMyAiAccount(); return; }
+    const known = <String, String>{
+      'EBOLAPE': 'https://www.ebolape.com',
+      'EBOLAPE Flight': 'https://www.ebolape.com',
+      'EBOLAPE Hotel': 'https://www.ebolape.com',
+      'EBOLAPE Bus': 'https://www.ebolape.com',
+      'EBOLAPE Rail': 'https://www.ebolape.com',
+      'EBOLAPE Recharge': 'https://www.ebolape.com',
+      'EBOLAPE Money Transfer': 'https://www.ebolape.com',
+      'EBOLAPE Utility Bill': 'https://www.ebolape.com',
+      'EBOLAPE Shop': 'https://www.ebolape.com',
+      'Video Studio': 'https://www.ebolascan.online/videoaiworkforce.php',
+      'Developer AI': 'https://www.ebolascan.online/developers/index.php',
+      'Products List': 'https://www.ebolascan.online/aion/marketplace.php',
+    };
+    final url = known[title];
+    if (url != null) {
+      _web(title, url);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('$title: dedicated authenticated page is not wired yet'),
+      ));
+    }
+  }
   Widget _devicePage() => ListView(padding: const EdgeInsets.all(16),children: [
     const _SectionHeader(title:'DEVICE COMMAND CENTRE',
       subtitle:'V03 Pro • AIMB-G2 Pro • Camera & Voice', icon:Icons.visibility),
