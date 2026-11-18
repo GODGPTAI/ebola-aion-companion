@@ -151,7 +151,22 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
           },
           onError: (Object error) => _log('RAW BLE STREAM ERROR: $error'),
         );
-        await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
+        // EBOLA BLE PREFLIGHT V1: permission, adapter and scan-session check.
+      final scanPermission = await Permission.bluetoothScan.request();
+      final connectPermission = await Permission.bluetoothConnect.request();
+      _log('RAW BLE PERMISSIONS scan=$scanPermission connect=$connectPermission');
+      final adapter = await FlutterBluePlus.adapterState.first;
+      _log('RAW BLE ADAPTER=$adapter');
+      if (scanPermission != PermissionStatus.granted ||
+          connectPermission != PermissionStatus.granted ||
+          adapter != BluetoothAdapterState.on) {
+        _log('RAW BLE BLOCKED: permissions or Bluetooth adapter not ready');
+        return;
+      }
+      // Stop stale scans before starting a fresh, unfiltered scan.
+      await FlutterBluePlus.stopScan();
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
         await Future<void>.delayed(const Duration(seconds: 13));
         if (mounted) setState(() => _rawBleCount = seen.length);
         _log('RAW BLE SCAN COMPLETE; unique devices=${seen.length}');
