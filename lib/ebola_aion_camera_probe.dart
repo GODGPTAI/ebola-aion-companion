@@ -1,3 +1,4 @@
+import 'package:permission_handler/permission_handler.dart';
 // EBOLA AION - development-only hardware camera probe.
 // UI branding is EBOLA AION. Third-party dependency identity must remain in
 // technical/legal notices and package manifests as its licence requires.
@@ -80,6 +81,10 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
     await _run('Scan', () async {
       if (!_ready) throw StateError('Initialize first');
       setState(() { _found.clear(); _selected = null; });
+      final perms = await [Permission.bluetoothScan, Permission.bluetoothConnect].request();
+      if (perms.values.any((p) => !p.isGranted)) {
+        throw StateError('Nearby devices permission required. Allow Bluetooth access in Android Settings.');
+      }
       final started = await _device.startScan(10);
       _log('Scan request: $started (10 seconds)');
     });
