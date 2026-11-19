@@ -37,6 +37,11 @@ jobs:
           flutter pub get
           dart format --output=none --set-exit-if-changed lib/ebola_aion_camera_probe*.dart || true
           flutter analyze --no-fatal-infos --no-fatal-warnings --no-pub lib/ebola_aion_camera_probe.dart lib/ebola_aion_camera_probe_main.dart
+      - name: Inspect MoYoung BLE connection states
+        run: |
+          SDK="$HOME/.pub-cache/hosted/pub.dev/moyoung_glasses_ble_plugin-1.4.0"
+          test -d "$SDK/lib"
+          grep -RniE "connectStateEveStm|ConnectionState|connectState|connected|disconnected" "$SDK/lib" | head -100 || true
       - name: Build internal debug APK - glass probe ONLY
         run: |
           PLUGIN="$HOME/.pub-cache/hosted/pub.dev/moyoung_glasses_ble_plugin-1.4.0/android/build.gradle"
