@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:moyoung_glasses_ble_plugin/moyoung_glasses_ble.dart';
+import 'ebola_glass_status.dart';
 
 class EbolaAionCameraProbe extends StatefulWidget {
   const EbolaAionCameraProbe({super.key});
@@ -35,6 +36,61 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
   final SpeechToText _speech = SpeechToText();
   bool _voiceListening = false;
   bool _videoCommandSent = false;
+  String _connectionPhase = 'Not connected';
+  String _signalReport = '-- dBm';
+  String _scanPhase = 'Idle';
+  StreamSubscription<BluetoothAdapterState>? _adapterWatch;
+  bool _autoScanRequested = false;
+  bool _rawScanCompleted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Device discovery is read-only. Camera use still requires consent.
+    _adapterWatch = FlutterBluePlus.adapterState.listen((state) {
+      if (state == BluetoothAdapterState.on && !_autoScanRequested) {
+        _autoScanRequested = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _autoDiscover();
+        });
+      } else if (state != BluetoothAdapterState.on) {
+        _autoScanRequested = false;
+        if (mounted) setState(() {
+          _connectionPhase = 'Bluetooth off';
+          _connected = false;
+          ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
+            connected: false, connection: 'Bluetooth off', discoveryPercent: 0);
+
+        });
+      }
+    }, onError: (Object error) => _log('Bluetooth monitor error: $error'));
+  }
+
+  Future<void> _autoDiscover() async {
+    if (_busy) return;
+    setState(() => _scanPhase = 'Initializing SDK');
+    ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
+      phase: 'Initializing SDK', discoveryPercent: 10);
+    await _initialize();
+    if (!mounted || !_ready) {
+      if (mounted) setState(() => _scanPhase = 'SDK initialization failed');
+      return;
+    }
+    setState(() => _scanPhase = 'Scanning nearby BLE devices');
+    ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
+      phase: 'Scanning nearby BLE devices', discoveryPercent: 40);
+    await _rawBleScan();
+    if (mounted) setState(() => _scanPhase = !_rawScanCompleted
+      ? 'Discovery failed or Bluetooth permission blocked'
+      : (_found.isEmpty ? 'No compatible candidates detected' :
+        '${_found.length} candidate(s) found — choose a glass'));
+    ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
+      phase: !_rawScanCompleted ? 'Discovery blocked / failed' :
+        (_found.isEmpty ? 'Scan finished; no glasses found' :
+          'Scan finished; select a discovered glass'),
+      discoveryPercent: _rawScanCompleted ? 100 : 40);
+  }
+
 
   void _log(String message) {
     if (!mounted) return;
@@ -75,7 +131,22 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
         _log('Device discovered: $name'); // Don't leak MAC/address into UI logs.
       }, onError: (Object err) => _log('Scan stream error: $err')));
       _subscriptions.add(_device.connStateEveStm.listen((dynamic state) {
-        _log('Connection state event received: ${state.connectState}');
+        // Only explicit named SDK success states are accepted. Numeric state
+        // values are intentionally NOT guessed without OEM documentation.
+        final value = '${state.connectState}'.toLowerCase().trim();
+        final success = value == 'connected' || value.endsWith('.connected');
+        final lost = value == 'disconnected' || value.endsWith('.disconnected') ||
+            value == 'disconnecting' || value.endsWith('.disconnecting');
+        if (mounted) setState(() {
+          _connectionPhase = 'SDK event: $value';
+          if (success) _connected = true;
+          if (lost) { _connected = false; _batteryReport = 'Not queried'; }
+        });
+        ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
+          connected: _connected,
+          connection: _connected ? 'SDK connected' : _connectionPhase,
+          battery: _connected ? _batteryReport : 'Not queried');
+        _log('Connection state event received: $value; verifiedNamedSuccess=$success');
       }, onError: (Object err) => _log('Connection stream error: $err')));
       _subscriptions.add(_device.actionResultEveStm.listen((dynamic event) {
         _log('Device action result: ${event['action']} code=${event['code']}');
@@ -108,13 +179,16 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
         if (model.contains('aimb') || model.contains('g2pro')) {
           throw StateError('AIMB-G2 Pro discovered, but DZZ camera protocol is not verified. Bluetooth audio remains available.');
         }
+      if (mounted) setState(() { _connected = false; _connectionPhase = 'Connecting — waiting for SDK confirmation'; });
+      ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
+        connected: false, connection: 'Awaiting SDK confirmation');
       await _device.connect(ConnectBean(address: _selected!));
-      _log('Connection request submitted; awaiting device state');
-      _log(_connected ? 'GLASS CONNECTED' : 'CONNECTION FAILED');
+      _log('Connection request submitted; waiting for asynchronous SDK confirmation');
     });
   }
 
     Future<void> _rawBleScan() async {
+    _rawScanCompleted = false;
     await _run('Raw BLE scan', () async {
       final seen = <String>{};
       StreamSubscription<List<ScanResult>>? subscription;
@@ -143,7 +217,12 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
                   name.toLowerCase().contains('g2pro')) {
                 if (mounted) setState(() {
                   _found[id] = name;
+                  _selected ??= id;
+                  _signalReport = '${result.rssi} dBm (scan RSSI)';
                 });
+                ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
+                  candidate: name, rssi: '${result.rssi} dBm (scan)',
+                  phase: 'Discovered $name', discoveryPercent: 75);
                 _log('GLASS CANDIDATE AVAILABLE: $name (select in dropdown; camera connection not proven)');
               }_log('RAW BLE FOUND name=$name id=$id rssi=${result.rssi} '
                   'services=${adv.serviceUuids.join(',')}');
@@ -169,6 +248,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
         await Future<void>.delayed(const Duration(seconds: 13));
         if (mounted) setState(() => _rawBleCount = seen.length);
+        _rawScanCompleted = true;
         _log('RAW BLE SCAN COMPLETE; unique devices=${seen.length}');
       } finally {
         await subscription?.cancel();
@@ -259,6 +339,8 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
       try {
         final battery = await _device.queryBattery();
         if (mounted) setState(() => _batteryReport = battery.toString());
+        ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
+          battery: battery.toString());
         _log('OEM BATTERY RESPONSE: $battery');
       } catch (error) {
         if (mounted) setState(() => _batteryReport = 'Read failed');
@@ -307,6 +389,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
   @override
   void dispose() {
     _speech.cancel();
+    _adapterWatch?.cancel();
     for (final subscription in _subscriptions) { subscription.cancel(); }
     super.dispose();
   }
@@ -318,6 +401,19 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
       body: ListView(padding: const EdgeInsets.all(16), children: [
         const Text('Physical smart-glasses camera only — no laptop or phone camera.'),
         const Text('Development test. Photo command sent is NOT proof of media receipt.'),
+        Card(color: const Color(0xFF160B13), child: Padding(
+          padding: const EdgeInsets.all(12), child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('EBOLA AI • AUTO DEVICE TEST', style: TextStyle(
+              color: Color(0xFF39FF73), fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text(_scanPhase, style: const TextStyle(color: Colors.white)),
+            const SizedBox(height: 6),
+            Text('Connection: $_connectionPhase', style: const TextStyle(color: Colors.white)),
+            Text('Signal: $_signalReport', style: const TextStyle(color: Colors.white)),
+            const Text('No automatic camera recording or upload. Capture requires consent.',
+              style: TextStyle(color: Color(0xFFC8B8C1), fontSize: 11)),
+          ]))),
         SwitchListTile(title: const Text('Allow camera test for this session'),
           value: _cameraConsent, onChanged: (value) => setState(() => _cameraConsent = value)),
         FilledButton(onPressed: _busy || _ready ? null : _initialize, child: const Text('1. Initialize Device SDK')),

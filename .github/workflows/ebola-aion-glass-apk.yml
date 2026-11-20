@@ -36,23 +36,30 @@ jobs:
         run: |
           flutter pub get
           dart format --output=none --set-exit-if-changed lib/ebola_aion_camera_probe*.dart || true
-          flutter analyze --no-fatal-infos --no-fatal-warnings --no-pub lib/ebola_aion_camera_probe.dart lib/ebola_aion_camera_probe_main.dart
+          flutter analyze --no-fatal-infos --no-fatal-warnings --no-pub lib/ebola_aion_camera_probe.dart lib/ebola_aion_camera_probe_main.dart lib/ebola_aion_red_white_app.dart lib/ebola_aion_home_v2.dart lib/ebola_my_ai_account_screen.dart
       - name: Inspect MoYoung BLE connection states
         run: |
           SDK="$HOME/.pub-cache/hosted/pub.dev/moyoung_glasses_ble_plugin-1.4.0"
           test -d "$SDK/lib"
           grep -RniE "connectStateEveStm|ConnectionState|connectState|connected|disconnected" "$SDK/lib" | head -100 || true
-      - name: Build internal debug APK - glass probe ONLY
+      - name: Build internal debug APK - FULL NEON APP
         run: |
           PLUGIN="$HOME/.pub-cache/hosted/pub.dev/moyoung_glasses_ble_plugin-1.4.0/android/build.gradle"
           test -f "$PLUGIN"
           sed -i 's/proguard-android.txt/proguard-android-optimize.txt/g' "$PLUGIN"
           grep -n 'proguard-android-optimize.txt' "$PLUGIN"
+          flutter build apk --debug --target lib/ebola_aion_red_white_app.dart
+          cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/ebola-aion-neon-debug.apk
+      - name: Build legacy camera probe APK for diagnostics
+        run: |
           flutter build apk --debug --target lib/ebola_aion_camera_probe_main.dart
+          cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/ebola-aion-camera-probe-debug.apk
       - name: Upload internal debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: EBOLA-AION-GLASS-CAMERA-DEBUG-APK
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: EBOLA-AION-NEON-FULL-AND-CAMERA-DEBUG
+          path: |
+            build/app/outputs/flutter-apk/ebola-aion-neon-debug.apk
+            build/app/outputs/flutter-apk/ebola-aion-camera-probe-debug.apk
           if-no-files-found: error
           retention-days: 3

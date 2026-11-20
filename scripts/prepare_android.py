@@ -48,3 +48,18 @@ if _ebola_android_manifest.exists():
             '<application', '<uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <application', 1
         )
         _ebola_android_manifest.write_text(_ebola_manifest_text, encoding='utf-8')
+# NEON_FULL_APK_V1: brand the generated Android scaffold without touching user accounts.
+import shutil as _ebola_shutil
+for _density in ('mdpi','hdpi','xhdpi','xxhdpi','xxxhdpi'):
+    _source = app/'assets/android_launcher'/('ic_launcher_'+_density+'.png')
+    _dest = app/'android/app/src/main/res'/('mipmap-'+_density)/'ic_launcher.png'
+    if _source.exists():
+        _dest.parent.mkdir(parents=True,exist_ok=True)
+        _ebola_shutil.copyfile(_source,_dest)
+    else:
+        print('WARNING: launcher icon missing', _source)
+_content = manifest.read_text(encoding='utf-8')
+_content = re.sub(r'android:label="[^"]*"', 'android:label="EBOLA AI"', _content, count=1)
+manifest.write_text(_content,encoding='utf-8')
+ET.parse(manifest)
+print('PASS EBOLA AI launcher label and original-logo icon preparation')

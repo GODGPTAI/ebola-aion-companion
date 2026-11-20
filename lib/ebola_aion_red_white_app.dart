@@ -5,12 +5,13 @@ import 'ebola_aion_home_v2.dart'; // EBOLA_HOME_V2_WIRED
 // Device operations remain in the existing EbolaAionCameraProbe widget.
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'ebola_aion_camera_probe.dart';
 
-const Color _red = Color(0xFFB30813);
+const Color _red = Color(0xFFE9002E);
 const Color _darkRed = Color(0xFF760009);
-const Color _paper = Color(0xFFF8F8FA);
+const Color _paper = Color(0xFF080609);
 const Color _ink = Color(0xFF24272B);
 
 void main() => runApp(const EbolaAionRedWhiteApp());
@@ -20,13 +21,13 @@ class EbolaAionRedWhiteApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
     debugShowCheckedModeBanner: false,
-    title: 'EBOLA AION | EBOLAPE',
+    title: 'EBOLA AI | Glass Command Centre',
     theme: ThemeData(
       useMaterial3: true,
       scaffoldBackgroundColor: _paper,
       colorScheme: ColorScheme.fromSeed(seedColor: _red, primary: _red,
         surface: Colors.white),
-      appBarTheme: const AppBarTheme(backgroundColor: _red,
+      appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF4A0719),
         foregroundColor: Colors.white, elevation: 0),
     ),
     home: const _Shell(),
@@ -43,6 +44,8 @@ class _ShellState extends State<_Shell> {
   final DateTime _started = DateTime.now();
   DateTime? _sessionEnded;
   Timer? _ticker;
+  StreamSubscription<BluetoothAdapterState>? _btListener;
+  bool _btPopupShown = false;
   final List<String> _activity = [];
   bool _tracking = true;
   Duration get _duration => (_sessionEnded ?? DateTime.now()).difference(_started);
@@ -52,6 +55,38 @@ class _ShellState extends State<_Shell> {
       if (mounted && _tracking && _tab == 0) setState(() {});
     });
     _event('App session started');
+    _btListener = FlutterBluePlus.adapterState.listen((state) {
+      if (state != BluetoothAdapterState.on) {
+        _btPopupShown = false;
+        return;
+      }
+      if (_btPopupShown) return;
+      _btPopupShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        showDialog<void>(context: context, builder: (dialogContext) => AlertDialog(
+          backgroundColor: const Color(0xFF1A0910),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(19),
+            side: const BorderSide(color: Color(0xFF39FF73), width: 2)),
+          title: const Row(children: [Icon(Icons.bluetooth_searching,
+            color: Color(0xFF39FF73)), SizedBox(width: 9),
+            Expanded(child: Text('EBOLA AI • AUTO DEVICE TEST',
+              style: TextStyle(fontSize: 16, color: Colors.white)))]),
+          content: const Text('Bluetooth is ON. Open the Glass Command Centre to '
+            'automatically scan nearby devices. Discovery completion does not '
+            'prove Camera, Battery or Media Sync success.',
+            style: TextStyle(color: Color(0xFFC8B8C1))),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('LATER')),
+            FilledButton(onPressed: () {
+              Navigator.of(dialogContext).pop();
+              _openCamera();
+            }, child: const Text('RUN DEVICE TEST')),
+          ],
+        ));
+      });
+    }, onError: (Object error) => _event('Bluetooth status unavailable: $error'));
   }
   void _event(String message) {
     if (!mounted) return;
@@ -60,7 +95,7 @@ class _ShellState extends State<_Shell> {
       if (_activity.length > 35) _activity.removeLast();
     });
   }
-  @override void dispose() { _ticker?.cancel(); super.dispose(); }
+  @override void dispose() { _ticker?.cancel(); _btListener?.cancel(); super.dispose(); }
   String _fmt(Duration d) {
     final h=d.inHours.toString().padLeft(2,'0');
     final m=(d.inMinutes%60).toString().padLeft(2,'0');
@@ -92,9 +127,9 @@ class _ShellState extends State<_Shell> {
         title: const Row(children: [
           _RoundBrand(), SizedBox(width: 12),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-            children: [Text('EBOLA AION', style: TextStyle(fontSize: 21,
+            children: [Text('EBOLA AI', style: TextStyle(fontSize: 21,
               fontWeight: FontWeight.w900, letterSpacing: .4)),
-              Text('SMART GLASSES • EBOLAPE', style: TextStyle(fontSize: 10,
+              Text('NEON GLASS OS • EBOLAPE', style: TextStyle(fontSize: 10,
                 letterSpacing: 1.4))])),
         ]),
         actions: [IconButton(tooltip:'KRISHNA AI', onPressed: () => _web(
@@ -108,7 +143,9 @@ class _ShellState extends State<_Shell> {
           setState(() => _tab=index);
           _event('Opened ${['Device','EBOLAPE','Studio','Vault'][index]} tab');
         },
-        indicatorColor: const Color(0xFFFFD9DD),
+        indicatorColor: const Color(0xFF692032),
+        backgroundColor: const Color(0xFF130B12),
+        labelTextStyle: WidgetStateProperty.all(const TextStyle(color: Colors.white, fontSize: 10)),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.visibility_outlined),
             selectedIcon: Icon(Icons.visibility), label:'Device'),
@@ -402,9 +439,9 @@ class _RoundBrand extends StatelessWidget{
   const _RoundBrand();
   @override Widget build(BuildContext context)=>Container(width:44,height:44,
     decoration:BoxDecoration(shape:BoxShape.circle,
-      gradient:const LinearGradient(colors:[Colors.white,Color(0xFFFFC5C5)]),
-      border:Border.all(color:Colors.white,width:2)),
-    child:const Icon(Icons.auto_awesome,color:_red,size:27));
+      color:const Color(0xFF29050F),border:Border.all(color:const Color(0xFF39FF73),width:1.5)),
+    child:ClipOval(child:Image.asset('assets/images/EBOLA.png',fit:BoxFit.contain,
+      errorBuilder: (_, __, ___) => const Icon(Icons.auto_awesome,color:_red,size:27))));
 }
 class _SectionHeader extends StatelessWidget{
   final String title,subtitle; final IconData icon;
