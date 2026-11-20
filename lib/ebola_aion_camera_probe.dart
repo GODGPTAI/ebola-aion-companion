@@ -18,7 +18,7 @@ class EbolaAionCameraProbe extends StatefulWidget {
   State<EbolaAionCameraProbe> createState() => _EbolaAionCameraProbeState();
 }
 
-class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
+class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with WidgetsBindingObserver {
   final MoYoungGlassesBle _device = MoYoungGlassesBle();
   final List<String> _events = <String>[];
   final Map<String, String> _found = <String, String>{};
@@ -42,10 +42,15 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
   StreamSubscription<BluetoothAdapterState>? _adapterWatch;
   bool _autoScanRequested = false;
   bool _rawScanCompleted = false;
+  DateTime? _lastResumedScan;
+  String _scanHint = 'Turn on both glasses and keep them close to your phone.';
+  // The 100% bar represents DISCOVERY FINISHED, never connected/verified.
+
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Device discovery is read-only. Camera use still requires consent.
     _adapterWatch = FlutterBluePlus.adapterState.listen((state) {
       if (state == BluetoothAdapterState.on && !_autoScanRequested) {
@@ -66,12 +71,26 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
     }, onError: (Object error) => _log('Bluetooth monitor error: $error'));
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !mounted || _busy || _connected) return;
+    final now = DateTime.now();
+    if (_lastResumedScan != null &&
+        now.difference(_lastResumedScan!) < const Duration(seconds: 35)) return;
+    _lastResumedScan = now;
+    // Rescan only when discovery has no usable candidate. Do not auto-connect.
+    if (_found.isEmpty && _ready) {
+      _log('APP RESUMED: retrying BLE discovery (no camera command)');
+      _rawBleScan();
+    }
+  }
+
   Future<void> _autoDiscover() async {
     if (_busy) return;
     setState(() => _scanPhase = 'Initializing SDK');
     ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
       phase: 'Initializing SDK', discoveryPercent: 10);
-    await _initialize();
+    if (!_ready) await _initialize();
     if (!mounted || !_ready) {
       if (mounted) setState(() => _scanPhase = 'SDK initialization failed');
       return;
@@ -80,6 +99,11 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
     ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
       phase: 'Scanning nearby BLE devices', discoveryPercent: 40);
     await _rawBleScan();
+    // An OEM scan is worth trying if unfiltered Android scan sees zero devices.
+    // Neither scan alone is proof of authenticated Camera BLE connection.
+    if (mounted && _ready && _found.isEmpty && _rawScanCompleted) {
+      await _sdkDiscoveryFallback();
+    }
     if (mounted) setState(() => _scanPhase = !_rawScanCompleted
       ? 'Discovery failed or Bluetooth permission blocked'
       : (_found.isEmpty ? 'No compatible candidates detected' :
@@ -187,74 +211,128 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
     });
   }
 
-    Future<void> _rawBleScan() async {
+  Future<void> _sdkDiscoveryFallback() async {
+    await _run('OEM SDK discovery fallback', () async {
+      _log('RAW BLE empty; requesting 10-second OEM SDK scan');
+      if (mounted) setState(() => _scanHint =
+          'Android found no advertisements; trying manufacturer SDK scan.');
+      try {
+        // Prevent the Android generic scanner from competing with the OEM scanner.
+        await FlutterBluePlus.stopScan();
+        final started = await _device.startScan(10);
+        _log('OEM SDK SCAN request=$started');
+        await Future<void>.delayed(const Duration(seconds: 11));
+        _log('OEM SDK SCAN finished; candidates=${_found.length}');
+      } catch (error) {
+        _log('OEM SDK SCAN ERROR: $error');
+      }
+    });
+  }
+
+  Future<void> _rawBleScan() async {
     _rawScanCompleted = false;
     await _run('Raw BLE scan', () async {
       final seen = <String>{};
       StreamSubscription<List<ScanResult>>? subscription;
       try {
-        _log('RAW BLE SCAN STARTED (12 seconds, read-only)');
-        subscription = FlutterBluePlus.onScanResults.listen(
-          (results) {
-            for (final result in results) {
-              final id = result.device.remoteId.toString();
-              if (!seen.add(id)) continue;
-              final adv = result.advertisementData;
-              final name = adv.advName.isNotEmpty
-                  ? adv.advName
-                  : (result.device.platformName.isNotEmpty
-                      ? result.device.platformName
-                      : '(unnamed)');
-              if (mounted && (name.toLowerCase().contains('v03') ||
-                  name.toLowerCase().contains('glass') ||
-                  name.toLowerCase().contains('jl') ||
-                  name.toLowerCase().contains('ai'))) {
-                setState(() => _lastBleCandidate = '$name / RSSI ${result.rssi}');
-              }
-              // EBOLA_RAW_BLE_SELECTION_V2: advertisement discovery, not OEM authentication.
-              if (name.toLowerCase().contains('v03') ||
-                  name.toLowerCase().contains('aimb') ||
-                  name.toLowerCase().contains('g2pro')) {
-                if (mounted) setState(() {
-                  _found[id] = name;
-                  _selected ??= id;
-                  _signalReport = '${result.rssi} dBm (scan RSSI)';
-                });
-                ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
-                  candidate: name, rssi: '${result.rssi} dBm (scan)',
-                  phase: 'Discovered $name', discoveryPercent: 75);
-                _log('GLASS CANDIDATE AVAILABLE: $name (select in dropdown; camera connection not proven)');
-              }_log('RAW BLE FOUND name=$name id=$id rssi=${result.rssi} '
-                  'services=${adv.serviceUuids.join(',')}');
+        setState(() {
+          _scanPhase = 'Checking Bluetooth, location services and permissions';
+          _scanHint = 'Looking for BLE advertisements (not Classic audio pairing).';
+        });
+        final scanPermission = await Permission.bluetoothScan.request();
+        final connectPermission = await Permission.bluetoothConnect.request();
+        final locationService = await Permission.locationWhenInUse.serviceStatus;
+        final locationPermission = await Permission.locationWhenInUse.status;
+        _log('PREFLIGHT scan=$scanPermission connect=$connectPermission '
+            'locationService=$locationService locationPermission=$locationPermission');
+        final adapter = await FlutterBluePlus.adapterState.first;
+        _log('PREFLIGHT adapter=$adapter');
+        if (scanPermission != PermissionStatus.granted ||
+            connectPermission != PermissionStatus.granted ||
+            adapter != BluetoothAdapterState.on) {
+          setState(() => _scanHint = 'Turn Bluetooth ON and allow Nearby devices permission in Android Settings.');
+          throw StateError('BLE blocked: Bluetooth or Nearby devices permission');
+        }
+        if (locationService != ServiceStatus.enabled) {
+          _log('LOCATION SERVICE OFF: Some phones suppress BLE discovery. '
+              'Turn Android Location ON, then retry. No coordinates are accessed.');
+          setState(() => _scanHint =
+              'Enable Android Location switch (GPS) and retry. No GPS coordinates are collected.');
+        } else if (!locationPermission.isGranted) {
+          _log('LOCATION PERMISSION NOT GRANTED: scan will still run. '
+              'Some Android devices need Location permission for BLE discovery.');
+        }
+        // Subscribe before starting the scan; do not filter out advertisers.
+        subscription = FlutterBluePlus.onScanResults.listen((results) {
+          for (final result in results) {
+            final id = result.device.remoteId.toString();
+            if (id.isEmpty) continue;
+            final adv = result.advertisementData;
+            final name = adv.advName.isNotEmpty ? adv.advName :
+                (result.device.platformName.isNotEmpty ?
+                    result.device.platformName : '(unnamed)');
+            if (!seen.add(id)) continue;
+            final lower = name.toLowerCase();
+            if (lower.contains('v03') || lower.contains('aimb') ||
+                lower.contains('g2pro') || lower.contains('glass')) {
+              if (!mounted) continue;
+              setState(() {
+                _lastBleCandidate = '$name / RSSI ${result.rssi}';
+                _found[id] = name;
+                _selected ??= id;
+                _signalReport = '${result.rssi} dBm (scan RSSI)';
+              });
+              ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
+                candidate: name, rssi: '${result.rssi} dBm (scan)',
+                phase: 'Discovered $name', discoveryPercent: 75);
+              _log('GLASS ADVERTISEMENT FOUND: $name RSSI=${result.rssi}; '
+                  'camera protocol NOT verified');
+            } else {
+              _log('BLE ADVERTISEMENT: $name RSSI=${result.rssi}');
             }
-          },
-          onError: (Object error) => _log('RAW BLE STREAM ERROR: $error'),
-        );
-        // EBOLA BLE PREFLIGHT V1: permission, adapter and scan-session check.
-      final scanPermission = await Permission.bluetoothScan.request();
-      final connectPermission = await Permission.bluetoothConnect.request();
-      _log('RAW BLE PERMISSIONS scan=$scanPermission connect=$connectPermission');
-      final adapter = await FlutterBluePlus.adapterState.first;
-      _log('RAW BLE ADAPTER=$adapter');
-      if (scanPermission != PermissionStatus.granted ||
-          connectPermission != PermissionStatus.granted ||
-          adapter != BluetoothAdapterState.on) {
-        _log('RAW BLE BLOCKED: permissions or Bluetooth adapter not ready');
-        return;
-      }
-      // Stop stale scans before starting a fresh, unfiltered scan.
-      await FlutterBluePlus.stopScan();
-      await Future<void>.delayed(const Duration(milliseconds: 800));
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
-        await Future<void>.delayed(const Duration(seconds: 13));
-        if (mounted) setState(() => _rawBleCount = seen.length);
+          }
+        }, onError: (Object error) => _log('RAW BLE STREAM ERROR: $error'));
+
+        // Scan 1, then a second fresh scan only when the first returns nothing.
+        // Avoid simultaneous OEM/FlutterBluePlus scans.
+        for (var pass = 1; pass <= 2; pass++) {
+          if (pass == 2 && seen.isNotEmpty) break;
+          _log('RAW BLE PASS $pass STARTED (12 seconds)');
+          if (mounted) setState(() => _scanPhase = 'BLE scan pass $pass of 2');
+          await FlutterBluePlus.stopScan();
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+          await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
+          await Future<void>.delayed(const Duration(milliseconds: 12400));
+          _log('RAW BLE PASS $pass COMPLETE: unique devices=${seen.length}');
+        }
+        if (mounted) {
+          setState(() {
+            _rawBleCount = seen.length;
+            if (seen.isEmpty) {
+              _scanHint = '0 BLE advertisements. Turn both glasses ON, '
+                  'close their OEM apps, enable Android Location, and retry nearby.';
+            } else if (_found.isEmpty) {
+              _scanHint = '${seen.length} BLE devices found, but no matching glass name. '
+                  'Check that the glasses advertise in pairing mode.';
+            } else {
+              _scanHint = '${_found.length} candidates available. Select a glass. '
+                  'Camera connection not yet authenticated.';
+            }
+          });
+        }
         _rawScanCompleted = true;
-        _log('RAW BLE SCAN COMPLETE; unique devices=${seen.length}');
+        _log('RAW BLE SCAN COMPLETE uniqueDevices=${seen.length} '
+            'glassCandidates=${_found.length}');
+      } catch (error) {
+        _log('RAW BLE ERROR: $error');
+        rethrow;
       } finally {
         await subscription?.cancel();
+        try { await FlutterBluePlus.stopScan(); } catch (_) {}
       }
     });
   }
+
   // Device ACK and actual saved media must be verified separately.
   Future<void> _startGlassVideo() async {
     await _run('Start glasses video', () async {
@@ -388,6 +466,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _speech.cancel();
     _adapterWatch?.cancel();
     for (final subscription in _subscriptions) { subscription.cancel(); }
@@ -408,6 +487,9 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
               color: Color(0xFF39FF73), fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Text(_scanPhase, style: const TextStyle(color: Colors.white)),
+            const SizedBox(height: 5),
+            Text(_scanHint, style: const TextStyle(
+              color: Color(0xFFFFD5C5), fontSize: 12)),
             const SizedBox(height: 6),
             Text('Connection: $_connectionPhase', style: const TextStyle(color: Colors.white)),
             Text('Signal: $_signalReport', style: const TextStyle(color: Colors.white)),
@@ -444,7 +526,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> {
               ),
             ]),
           ),
-        ),FilledButton(onPressed: _busy || !_ready ? null : _rawBleScan, child: const Text('RAW BLE SCAN: 12 seconds')),
+        ),FilledButton(onPressed: _busy || !_ready ? null : _rawBleScan, child: const Text('RETRY BLE SCAN (2 passes if needed)')),
         FilledButton(onPressed: _busy || _selected == null ? null : _connect, child: const Text('3. Connect Glass')),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _photo,
           child: const Text('4. SHOOT PHOTO — GLASS CAMERA')),
