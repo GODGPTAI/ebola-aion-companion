@@ -1,4 +1,6 @@
+
 name: EBOLA AION Glass Camera - Internal Debug APK
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,30 +9,41 @@ on:
         type: boolean
         required: true
         default: false
+
 permissions:
   contents: read
+
 concurrency:
   group: ebola-aion-glass-apk-${{ github.ref }}
   cancel-in-progress: false
+
 jobs:
   debug-apk:
     if: ${{ inputs.license_approved == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: subosito/flutter-action@v2
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+
       - name: Prepare missing Android scaffold
         run: |
           flutter --version
           flutter create --platforms=android --project-name ebola_aion_companion .
+
       - name: Cache Gradle downloads across builds
         uses: actions/cache@v4
         with:
@@ -40,30 +53,126 @@ jobs:
           key: gradle-dependencies-${{ runner.os }}-${{ hashFiles('pubspec.lock', '.github/workflows/ebola-aion-glass-apk.yml') }}
           restore-keys: |
             gradle-dependencies-${{ runner.os }}-
+
       - name: Add hardware plugin to internal test build only
-        run: flutter pub add moyoung_glasses_ble_plugin:1.4.0
+        run: |
+          flutter pub add moyoung_glasses_ble_plugin:1.4.0
+
       - name: Android configuration
-        run: python3 scripts/prepare_android.py .
-      - name: Resolve & analyze
+        run: |
+          python3 scripts/prepare_android.py .
+
+      - name: Resolve and analyze
         run: |
           flutter pub get
+
           dart format --output=none --set-exit-if-changed lib/ebola_aion_camera_probe*.dart || true
-          flutter analyze --no-fatal-infos --no-fatal-warnings --no-pub lib/ebola_aion_camera_probe.dart lib/ebola_aion_camera_probe_main.dart lib/ebola_aion_red_white_app.dart lib/ebola_aion_home_v2.dart lib/ebola_my_ai_account_screen.dart
+
+          flutter analyze --no-fatal-infos --no-fatal-warnings --no-pub \
+            lib/ebola_aion_camera_probe.dart \
+            lib/ebola_aion_camera_probe_main.dart \
+            lib/ebola_aion_red_white_app.dart \
+            lib/ebola_aion_home_v2.dart \
+            lib/ebola_my_ai_account_screen.dart
+
+      # =====================================================
+      # V03 PRO - MOYOUNG SDK CONNECTION INSPECTION
+      # Read-only diagnostics. No source file modification.
+      # =====================================================
+
       - name: Inspect MoYoung BLE connection states
+        shell: bash
         run: |
+          set -euo pipefail
+
           SDK="$HOME/.pub-cache/hosted/pub.dev/moyoung_glasses_ble_plugin-1.4.0"
-          test -d "$SDK/lib"
-          grep -RniE "connectStateEveStm|ConnectionState|connectState|connected|disconnected" "$SDK/lib" | head -100 || true
+
+          echo "========================================"
+          echo "EBOLA AION - V03 PRO SDK DIAGNOSTICS"
+          echo "========================================"
+
+          echo "=== VERIFY SDK DIRECTORY ==="
+
+          if [ ! -d "$SDK/lib" ]; then
+            echo "ERROR: MoYoung SDK library not found"
+            exit 1
+          fi
+
+          echo "SDK FOUND: $SDK"
+
+          echo "=== SDK VERSION ==="
+          grep -n '^version:' "$SDK/pubspec.yaml"
+
+          echo "=== DART CONNECTION DEFINITIONS ==="
+          grep -RniE \
+            'connectStateEveStm|ConnectionState|connectState|connected|disconnected' \
+            "$SDK/lib" | head -100 || true
+
+          echo "=== NATIVE ANDROID CONNECTION STATES ==="
+
+          if [ -d "$SDK/android/src" ]; then
+            grep -RniE \
+              'connectState|CONNECTED|DISCONNECTED|onConnectionStateChange' \
+              "$SDK/android/src" | head -100 || true
+          else
+            echo "Android native source directory not found"
+          fi
+
+          echo "=== PROJECT CONNECTION HANDLER ==="
+
+          grep -RniE \
+            'connectStateEveStm|_connected|connectionState' \
+            lib/ebola_aion_camera_probe*.dart || true
+
+          echo "=== CAMERA API REFERENCES ==="
+
+          grep -RniE \
+            'takePhoto|takePicture|capturePhoto|startRecord|stopRecord|camera' \
+            "$SDK/lib" | head -100 || true
+
+          echo "========================================"
+          echo "SDK REFERENCE INSPECTION FINISHED"
+          echo "Hardware connection NOT verified by CI"
+          echo "========================================"
+
+      # =====================================================
+      # FULL NEON APP DEBUG APK
+      # =====================================================
+
       - name: Build internal debug APK - FULL NEON APP
+        shell: bash
         run: |
+          set -euo pipefail
+
           PLUGIN="$HOME/.pub-cache/hosted/pub.dev/moyoung_glasses_ble_plugin-1.4.0/android/build.gradle"
+
           test -f "$PLUGIN"
+
           sed -i 's/proguard-android.txt/proguard-android-optimize.txt/g' "$PLUGIN"
+
           grep -n 'proguard-android-optimize.txt' "$PLUGIN"
-          bash scripts/ebola_gradle_retry.sh lib/ebola_aion_red_white_app.dart ebola-aion-neon-debug.apk
+
+          bash scripts/ebola_gradle_retry.sh \
+            lib/ebola_aion_red_white_app.dart \
+            ebola-aion-neon-debug.apk
+
+      # =====================================================
+      # CAMERA PROBE DEBUG APK
+      # =====================================================
+
       - name: Build legacy camera probe APK for diagnostics
+        shell: bash
         run: |
-          bash scripts/ebola_gradle_retry.sh lib/ebola_aion_camera_probe_main.dart ebola-aion-camera-probe-debug.apk
+          set -euo pipefail
+
+          bash scripts/ebola_gradle_retry.sh \
+            lib/ebola_aion_camera_probe_main.dart \
+            ebola-aion-camera-probe-debug.apk
+
+      # =====================================================
+      # UPLOAD BOTH DEBUG APK FILES
+      # =====================================================
+
       - name: Upload internal debug APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -73,6 +182,11 @@ jobs:
             build/app/outputs/flutter-apk/ebola-aion-camera-probe-debug.apk
           if-no-files-found: error
           retention-days: 3
+
+      # =====================================================
+      # FAILURE DIAGNOSTICS
+      # =====================================================
+
       - name: Upload dependency/build failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
