@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:moyoung_glasses_ble_plugin/moyoung_glasses_ble.dart';
+import 'package:moyoung_glasses_ble_plugin/impl/moyoung_glasses_contants.dart' as mg;
 import 'ebola_glass_status.dart';
 
 class EbolaAionCameraProbe extends StatefulWidget {
@@ -104,10 +105,35 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
     if (mounted && _ready && _found.isEmpty && _rawScanCompleted) {
       await _sdkDiscoveryFallback();
     }
+    // Auto-connect to the V03 candidate ONLY. AIMB-G2 uses a different,
+    // unverified OEM camera protocol and must never be marked connected here.
+    if (mounted && !_connected && !_busy) {
+      String? v03Address;
+      for (final item in _found.entries) {
+        if (item.value.toLowerCase().contains('v03')) {
+          v03Address = item.key;
+          break;
+        }
+      }
+      if (v03Address != null) {
+        setState(() {
+          _selected = v03Address;
+          _scanPhase = 'V03 Pro found; requesting OEM connection';
+        });
+        _log('Auto-connect V03 Pro: SDK authentication pending');
+        await _connect(); // Only SDK connect event can turn UI green.
+      } else if (_found.isNotEmpty) {
+        _log('Candidate(s) discovered, but no V03 Pro OEM-compatible target. '
+            'AIMB-G2 camera connection intentionally blocked.');
+      }
+    }
     if (mounted) setState(() => _scanPhase = !_rawScanCompleted
       ? 'Discovery failed or Bluetooth permission blocked'
-      : (_found.isEmpty ? 'No compatible candidates detected' :
-        '${_found.length} candidate(s) found — choose a glass'));
+      : (_connected ? 'V03 Pro SDK connected' :
+        _connectionPhase.startsWith('Connecting') || _connectionPhase.startsWith('Awaiting') ?
+          _connectionPhase :
+          (_found.isEmpty ? 'No compatible candidates detected' :
+          '${_found.length} candidate(s) found — choose a glass')));
     ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
       phase: !_rawScanCompleted ? 'Discovery blocked / failed' :
         (_found.isEmpty ? 'Scan finished; no glasses found' :
@@ -154,24 +180,42 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         });
         _log('Device discovered: $name'); // Don't leak MAC/address into UI logs.
       }, onError: (Object err) => _log('Scan stream error: $err')));
+      // SDK 1.4.0 ConnectStateBean.connectState is an INT, not the word
+      // "connected". Compare to the OEM constants, never a guessed bool.
       _subscriptions.add(_device.connStateEveStm.listen((dynamic state) {
-        // Only explicit named SDK success states are accepted. Numeric state
-        // values are intentionally NOT guessed without OEM documentation.
-        final value = '${state.connectState}'.toLowerCase().trim();
-        final success = value == 'connected' || value.endsWith('.connected');
-        final lost = value == 'disconnected' || value.endsWith('.disconnected') ||
-            value == 'disconnecting' || value.endsWith('.disconnecting');
+        final int code = state.connectState as int;
+        final success = code == mg.ConnectionState.connected;
+        final lost = code == mg.ConnectionState.disconnected ||
+            code == mg.ConnectionState.disconnecting;
+        final phase = success ? 'Connected (SDK event)' :
+            code == mg.ConnectionState.connecting ? 'Connecting (SDK event)' :
+            code == mg.ConnectionState.disconnecting ? 'Disconnecting' :
+            code == mg.ConnectionState.disconnected ? 'Disconnected' :
+            'Unknown SDK state $code';
         if (mounted) setState(() {
-          _connectionPhase = 'SDK event: $value';
+          _connectionPhase = phase;
           if (success) _connected = true;
-          if (lost) { _connected = false; _batteryReport = 'Not queried'; }
+          if (lost || code == mg.ConnectionState.connecting) {
+            _connected = false;
+            if (lost) _batteryReport = 'Not queried';
+          }
         });
         ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
           connected: _connected,
-          connection: _connected ? 'SDK connected' : _connectionPhase,
+          connection: phase,
           battery: _connected ? _batteryReport : 'Not queried');
-        _log('Connection state event received: $value; verifiedNamedSuccess=$success');
+        _log('OEM connection state=$code phase=$phase; sdkConnected=$success');
       }, onError: (Object err) => _log('Connection stream error: $err')));
+      _subscriptions.add(_device.batteryEveStm.listen((dynamic battery) {
+        final value = battery is Map ? battery['battery'] : null;
+        final charging = battery is Map ? battery['charging'] : null;
+        if (!_connected) return; // Never show a disconnected glass as live.
+        final report = value == null ? 'Response: $battery' :
+            '$value%${charging == true ? ' (charging)' : ''}';
+        if (mounted) setState(() => _batteryReport = report);
+        ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(battery: report);
+        _log('OEM battery event received; percentage=${value ?? "unknown"}, charging=${charging ?? "unknown"}');
+      }, onError: (Object err) => _log('Battery stream error: $err')));
       _subscriptions.add(_device.actionResultEveStm.listen((dynamic event) {
         _log('Device action result: ${event['action']} code=${event['code']}');
       }, onError: (Object err) => _log('Action stream error: $err')));

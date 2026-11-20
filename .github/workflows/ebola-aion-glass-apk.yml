@@ -9,6 +9,9 @@ on:
         default: false
 permissions:
   contents: read
+concurrency:
+  group: ebola-aion-glass-apk-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   debug-apk:
     if: ${{ inputs.license_approved == true }}
@@ -28,6 +31,15 @@ jobs:
         run: |
           flutter --version
           flutter create --platforms=android --project-name ebola_aion_companion .
+      - name: Cache Gradle downloads across builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper
+          key: gradle-dependencies-${{ runner.os }}-${{ hashFiles('pubspec.lock', '.github/workflows/ebola-aion-glass-apk.yml') }}
+          restore-keys: |
+            gradle-dependencies-${{ runner.os }}-
       - name: Add hardware plugin to internal test build only
         run: flutter pub add moyoung_glasses_ble_plugin:1.4.0
       - name: Android configuration
@@ -48,12 +60,10 @@ jobs:
           test -f "$PLUGIN"
           sed -i 's/proguard-android.txt/proguard-android-optimize.txt/g' "$PLUGIN"
           grep -n 'proguard-android-optimize.txt' "$PLUGIN"
-          flutter build apk --debug --target lib/ebola_aion_red_white_app.dart
-          cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/ebola-aion-neon-debug.apk
+          bash scripts/ebola_gradle_retry.sh lib/ebola_aion_red_white_app.dart ebola-aion-neon-debug.apk
       - name: Build legacy camera probe APK for diagnostics
         run: |
-          flutter build apk --debug --target lib/ebola_aion_camera_probe_main.dart
-          cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/ebola-aion-camera-probe-debug.apk
+          bash scripts/ebola_gradle_retry.sh lib/ebola_aion_camera_probe_main.dart ebola-aion-camera-probe-debug.apk
       - name: Upload internal debug APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -62,4 +72,12 @@ jobs:
             build/app/outputs/flutter-apk/ebola-aion-neon-debug.apk
             build/app/outputs/flutter-apk/ebola-aion-camera-probe-debug.apk
           if-no-files-found: error
+          retention-days: 3
+      - name: Upload dependency/build failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: EBOLA-AION-CI-FAILURE-LOGS
+          path: build/ebola-ci-logs/*.log
+          if-no-files-found: ignore
           retention-days: 3
