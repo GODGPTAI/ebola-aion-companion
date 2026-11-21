@@ -23,6 +23,11 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
   final MoYoungGlassesBle _device = MoYoungGlassesBle();
   final List<String> _events = <String>[];
   final Map<String, String> _found = <String, String>{};
+  // Unfiltered raw BLE observations for troubleshooting only; not OEM connect targets.
+  final Map<String, String> _rawNearby = <String, String>{};
+  // OEM SDK discoveries are the only connectable candidates.
+  // Raw BLE advertisements are observations, not verified SDK targets.
+  final Map<String, String> _oemFound = <String, String>{};
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   String? _selected;
   bool _ready = false;
@@ -100,32 +105,16 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
     ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
       phase: 'Scanning nearby BLE devices', discoveryPercent: 40);
     await _rawBleScan();
-    // An OEM scan is worth trying if unfiltered Android scan sees zero devices.
-    // Neither scan alone is proof of authenticated Camera BLE connection.
-    if (mounted && _ready && _found.isEmpty && _rawScanCompleted) {
+    // Always perform a separate SDK discovery pass. A raw scan can discover
+    // Bluetooth audio/other services that the OEM camera SDK cannot connect to.
+    if (mounted && _ready && _rawScanCompleted) {
       await _sdkDiscoveryFallback();
     }
-    // Auto-connect to the V03 candidate ONLY. AIMB-G2 uses a different,
-    // unverified OEM camera protocol and must never be marked connected here.
-    if (mounted && !_connected && !_busy) {
-      String? v03Address;
-      for (final item in _found.entries) {
-        if (item.value.toLowerCase().contains('v03')) {
-          v03Address = item.key;
-          break;
-        }
-      }
-      if (v03Address != null) {
-        setState(() {
-          _selected = v03Address;
-          _scanPhase = 'V03 Pro found; requesting OEM connection';
-        });
-        _log('Auto-connect V03 Pro: SDK authentication pending');
-        await _connect(); // Only SDK connect event can turn UI green.
-      } else if (_found.isNotEmpty) {
-        _log('Candidate(s) discovered, but no V03 Pro OEM-compatible target. '
-            'AIMB-G2 camera connection intentionally blocked.');
-      }
+    // Never auto-connect based only on an advertising name or raw address.
+    // A user must explicitly choose an SDK-discovered candidate.
+    if (mounted && _oemFound.isNotEmpty) {
+      _log('OEM candidates found=${_oemFound.length}; V03 auto-connect eligible');
+      await _connectKnownV03();
     }
     if (mounted) setState(() => _scanPhase = !_rawScanCompleted
       ? 'Discovery failed or Bluetooth permission blocked'
@@ -164,6 +153,13 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
 
   Future<void> _initialize() async {
     await _run('Initialize', () async {
+      final scanPerm = await Permission.bluetoothScan.request();
+      final connectPerm = await Permission.bluetoothConnect.request();
+      _log('SDK PREFLIGHT bluetoothScan=$scanPerm bluetoothConnect=$connectPerm');
+      if (!scanPerm.isGranted || !connectPerm.isGranted) {
+        _log('SDK initialization blocked: allow Nearby Devices permission');
+        return;
+      }
       final result = await _device.initialize();
       final btEnabled = await _device.checkBluetoothEnable;
       if (result != true || btEnabled != true) {
@@ -175,6 +171,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         final name = '${found.name}';
         if (!mounted || id.isEmpty) return;
         setState(() {
+          _oemFound[id] = name;
           _found[id] = name;
           _selected ??= id;
         });
@@ -183,8 +180,9 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
       // SDK 1.4.0 ConnectStateBean.connectState is an INT, not the word
       // "connected". Compare to the OEM constants, never a guessed bool.
       _subscriptions.add(_device.connStateEveStm.listen((dynamic state) {
-        final int code = state.connectState as int;
-        final success = code == mg.ConnectionState.connected;
+        final dynamic rawCode = state.connectState;
+        final int? code = rawCode is int ? rawCode : int.tryParse('$rawCode');
+        final success = code != null && code == mg.ConnectionState.connected;
         final lost = code == mg.ConnectionState.disconnected ||
             code == mg.ConnectionState.disconnecting;
         final phase = success ? 'Connected (SDK event)' :
@@ -192,7 +190,8 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
             code == mg.ConnectionState.disconnecting ? 'Disconnecting' :
             code == mg.ConnectionState.disconnected ? 'Disconnected' :
             'Unknown SDK state $code';
-        if (mounted) setState(() {
+        if (!mounted) return;
+        setState(() {
           _connectionPhase = phase;
           if (success) _connected = true;
           if (lost || code == mg.ConnectionState.connecting) {
@@ -227,23 +226,62 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
     });
   }
 
-  Future<void> _scan() async {
-    await _run('Scan', () async {
-      if (!_ready) throw StateError('Initialize first');
-      setState(() { _found.clear(); _selected = null; });
-      final perms = await [Permission.bluetoothScan, Permission.bluetoothConnect].request();
-      if (perms.values.any((p) => !p.isGranted)) {
-        throw StateError('Nearby devices permission required. Allow Bluetooth access in Android Settings.');
+  // Find Glasses runs Android discovery, then always performs OEM discovery.
+  // No connection or camera command is sent by this manual diagnostic scan.
+  // Auto-connect only to a V03 address reported by the OEM SDK.
+  // Raw scanner results are never accepted as connection credentials.
+  Future<void> _connectKnownV03() async {
+    if (!mounted || _connected || _busy || !_ready) return;
+    String? v03;
+    for (final entry in _oemFound.entries) {
+      if (entry.value.toLowerCase().contains('v03')) {
+        v03 = entry.key;
+        break;
       }
-      final started = await _device.startScan(10);
-      _log('Scan request: $started (10 seconds)');
+    }
+    if (v03 == null) {
+      _log('AUTO CONNECT: no V03-named OEM candidate; select an OEM device manually');
+      return;
+    }
+    setState(() => _selected = v03);
+    _log('AUTO CONNECT: V03 discovered by OEM SDK; requesting connection');
+    await _connect();
+  }
+
+  Future<void> _scan() async {
+    if (!_ready || _busy) return;
+    setState(() {
+      _found.clear();
+      _oemFound.clear();
+      _selected = null;
+      _rawNearby.clear();
+      _rawBleCount = 0;
+      _scanPhase = 'Starting raw BLE discovery';
     });
+    try {
+      await _rawBleScan();
+      // OEM discovery must run even when the generic scanner returned 0.
+      if (mounted && _ready) {
+        await _sdkDiscoveryFallback();
+        await _connectKnownV03();
+      }
+      if (mounted) {
+        setState(() => _scanPhase = _found.isNotEmpty
+            ? '${_found.length} compatible candidate(s) found'
+            : 'No compatible glass detected; inspect ALL BLE devices below');
+      }
+    } catch (error) {
+      _log('FIND GLASSES ERROR: $error');
+      if (mounted) setState(() => _scanPhase = 'BLE scan failed — check diagnostics');
+    }
   }
 
   Future<void> _connect() async {
     await _run('Connect', () async {
-      if (!_ready || _selected == null) throw StateError('Select discovered glass');
-        final model = (_found[_selected] ?? '').toLowerCase();
+      if (!_ready || _selected == null || !_oemFound.containsKey(_selected)) {
+        throw StateError('Select a glass discovered by the OEM SDK');
+      }
+        final model = (_oemFound[_selected] ?? '').toLowerCase();
         if (model.contains('aimb') || model.contains('g2pro')) {
           throw StateError('AIMB-G2 Pro discovered, but DZZ camera protocol is not verified. Bluetooth audio remains available.');
         }
@@ -257,16 +295,19 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
 
   Future<void> _sdkDiscoveryFallback() async {
     await _run('OEM SDK discovery fallback', () async {
-      _log('RAW BLE empty; requesting 10-second OEM SDK scan');
+      _log('Requesting 10-second OEM SDK scan (separate from raw BLE)');
       if (mounted) setState(() => _scanHint =
-          'Android found no advertisements; trying manufacturer SDK scan.');
+          'Checking OEM-compatible devices after Android BLE discovery.');
       try {
         // Prevent the Android generic scanner from competing with the OEM scanner.
         await FlutterBluePlus.stopScan();
         final started = await _device.startScan(10);
         _log('OEM SDK SCAN request=$started');
+        if (started != true) {
+          _log('OEM SDK SCAN DID NOT START: SDK returned $started');
+        }
         await Future<void>.delayed(const Duration(seconds: 11));
-        _log('OEM SDK SCAN finished; candidates=${_found.length}');
+        _log('OEM SDK SCAN finished; OEM candidates=${_oemFound.length}');
       } catch (error) {
         _log('OEM SDK SCAN ERROR: $error');
       }
@@ -277,6 +318,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
     _rawScanCompleted = false;
     await _run('Raw BLE scan', () async {
       final seen = <String>{};
+      if (mounted) setState(() => _rawNearby.clear());
       StreamSubscription<List<ScanResult>>? subscription;
       try {
         setState(() {
@@ -315,24 +357,32 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
             final name = adv.advName.isNotEmpty ? adv.advName :
                 (result.device.platformName.isNotEmpty ?
                     result.device.platformName : '(unnamed)');
-            if (!seen.add(id)) continue;
+            final isFirstSight = seen.add(id);
+            // Repeated advertisements may gain a name later: update the record.
+            // Display ALL advertisements, even unnamed ones. This list is
+            // diagnostic only; never auto-connect to these raw addresses.
+            if (mounted) {
+              setState(() => _rawNearby[id] = '$name  |  ${result.rssi} dBm');
+            }
             final lower = name.toLowerCase();
             if (lower.contains('v03') || lower.contains('aimb') ||
                 lower.contains('g2pro') || lower.contains('glass')) {
               if (!mounted) continue;
               setState(() {
                 _lastBleCandidate = '$name / RSSI ${result.rssi}';
-                _found[id] = name;
-                _selected ??= id;
                 _signalReport = '${result.rssi} dBm (scan RSSI)';
               });
               ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
                 candidate: name, rssi: '${result.rssi} dBm (scan)',
                 phase: 'Discovered $name', discoveryPercent: 75);
-              _log('GLASS ADVERTISEMENT FOUND: $name RSSI=${result.rssi}; '
-                  'camera protocol NOT verified');
+              if (isFirstSight) {
+                _log('GLASS ADVERTISEMENT FOUND: $name RSSI=${result.rssi}; '
+                    'camera protocol NOT verified');
+              }
             } else {
-              _log('BLE ADVERTISEMENT: $name RSSI=${result.rssi}');
+              if (isFirstSight) {
+                _log('BLE ADVERTISEMENT: $name RSSI=${result.rssi}');
+              }
             }
           }
         }, onError: (Object error) => _log('RAW BLE STREAM ERROR: $error'));
@@ -356,17 +406,17 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
               _scanHint = '0 BLE advertisements. Turn both glasses ON, '
                   'close their OEM apps, enable Android Location, and retry nearby.';
             } else if (_found.isEmpty) {
-              _scanHint = '${seen.length} BLE devices found, but no matching glass name. '
+              _scanHint = '${seen.length} BLE advertisers found; OEM discovery follows. '
                   'Check that the glasses advertise in pairing mode.';
             } else {
-              _scanHint = '${_found.length} candidates available. Select a glass. '
+              _scanHint = '${_oemFound.length} OEM candidates available. Select a glass. '
                   'Camera connection not yet authenticated.';
             }
           });
         }
         _rawScanCompleted = true;
         _log('RAW BLE SCAN COMPLETE uniqueDevices=${seen.length} '
-            'glassCandidates=${_found.length}');
+            'OEMCandidates=${_oemFound.length}');
       } catch (error) {
         _log('RAW BLE ERROR: $error');
         rethrow;
@@ -570,7 +620,17 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
               ),
             ]),
           ),
-        ),FilledButton(onPressed: _busy || !_ready ? null : _rawBleScan, child: const Text('RETRY BLE SCAN (2 passes if needed)')),
+        ),
+        const SizedBox(height: 8),
+        Text('ALL BLE ADVERTISEMENTS (${_rawNearby.length})',
+          style: const TextStyle(fontWeight: FontWeight.bold)),
+        if (_rawNearby.isEmpty)
+          const Text('No BLE advertisements received yet. Check Nearby devices permission and Bluetooth.'),
+        for (final entry in _rawNearby.entries)
+          Text(entry.value, style: const TextStyle(fontSize: 12)),
+        Text('OEM SDK candidates: ${_oemFound.length} (only these can connect)'),
+        FilledButton(onPressed: _busy || !_ready ? null : _scan,
+          child: const Text('RETRY FULL BLE DISCOVERY (raw + OEM)')),
         FilledButton(onPressed: _busy || _selected == null ? null : _connect, child: const Text('3. Connect Glass')),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _photo,
           child: const Text('4. SHOOT PHOTO — GLASS CAMERA')),
