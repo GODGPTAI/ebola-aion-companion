@@ -181,6 +181,9 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
     await _run('Initialize', () async {
       final scanPerm = await Permission.bluetoothScan.request();
       final connectPerm = await Permission.bluetoothConnect.request();
+      // EBOLA_V03_RUNTIME_DISCOVERY_V2: optional BLE location permission; never read GPS.
+      final locPerm = await Permission.locationWhenInUse.request();
+      _log('SDK PREFLIGHT locationPermission=$locPerm (Android 12+ may scan without it)');
       _log('SDK PREFLIGHT bluetoothScan=$scanPerm bluetoothConnect=$connectPerm');
       if (!scanPerm.isGranted || !connectPerm.isGranted) {
         _log('SDK initialization blocked: allow Nearby Devices permission');
@@ -241,6 +244,14 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(battery: report);
         _log('OEM battery event received; percentage=${value ?? "unknown"}, charging=${charging ?? "unknown"}');
       }, onError: (Object err) => _log('Battery stream error: $err')));
+      // Diagnostic SDK logging - no raw device addresses in the user log.
+      _subscriptions.add(_device.sdkLogEveStm.listen((String message) {
+        final safe = message.replaceAll(RegExp(r'(?i)\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b'), '[device]');
+        _log('OEM NATIVE: $safe');
+      }, onError: (Object err) => _log('OEM native log error: $err')));
+      _subscriptions.add(_device.ackErrorEveStm.listen((Map<String, dynamic> event) {
+        _log('OEM ACK ERROR: code=${event['code']} action=${event['action']}');
+      }, onError: (Object err) => _log('OEM ACK stream error: $err')));
       _subscriptions.add(_device.actionResultEveStm.listen((dynamic event) {
         _log('Device action result: ${event['action']} code=${event['code']}');
       }, onError: (Object err) => _log('Action stream error: $err')));
@@ -368,7 +379,10 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         final scanPermission = await Permission.bluetoothScan.request();
         final connectPermission = await Permission.bluetoothConnect.request();
         final locationService = await Permission.locationWhenInUse.serviceStatus;
-        final locationPermission = await Permission.locationWhenInUse.status;
+        var locationPermission = await Permission.locationWhenInUse.status;
+        if (!locationPermission.isGranted && !locationPermission.isPermanentlyDenied) {
+          locationPermission = await Permission.locationWhenInUse.request();
+        }
         _log('PREFLIGHT scan=$scanPermission connect=$connectPermission '
             'locationService=$locationService locationPermission=$locationPermission');
         final adapter = await FlutterBluePlus.adapterState.first;
