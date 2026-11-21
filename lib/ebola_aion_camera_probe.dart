@@ -720,7 +720,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
           hint: const Text('Select glass', style: TextStyle(color: Color(0xFF161616))),
           value: _selected,
           items: _found.entries.map((e) => DropdownMenuItem(value: e.key,
-            child: Text(e.value.isEmpty ? 'EBOLA AION Glass' : e.value))).toList(),
+            child: Text(e.value.toLowerCase().contains('v03') ? 'EBOLA AION G1' : (e.value.isEmpty ? 'Unknown BLE device' : e.value)))).toList(),
           onChanged: (v) => setState(() => _selected = v)),
         Card(
           color: const Color(0xFFFFF7F7),
