@@ -1,7 +1,8 @@
-import 'package:flutter/services.dart';
+﻿import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:permission_handler/permission_handler.dart';
+// EBOLA AION - V03 integrated diagnostic build 2026-11-21.
 // EBOLA AION - development-only hardware camera probe.
 // UI branding is EBOLA AION. Third-party dependency identity must remain in
 // technical/legal notices and package manifests as its licence requires.
@@ -32,12 +33,15 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
   String? _selected;
   bool _ready = false;
   bool _connected = false;
-  // EBOLA_V03_DEVICE_DASH_V1 â€” local diagnostic state, not OEM authentication.
+  // EBOLA_V03_DEVICE_DASH_V1 - local diagnostic state, not OEM authentication.
   String _batteryReport = 'Not queried';
   String _lastBleCandidate = 'None detected';
   int _rawBleCount = 0;
   bool _busy = false;
   bool _cameraConsent = false;
+  // Imported photos remain local to the phone; no server upload.
+  final List<File> _importedPhotos = <File>[];
+  String _mediaStatus = 'No photos imported yet';
   // EBOLA_V03_VOICE_VIDEO_V1: local UI state, NOT device capture acknowledgement.
   final SpeechToText _speech = SpeechToText();
   bool _voiceListening = false;
@@ -87,7 +91,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
     // Rescan only when discovery has no usable candidate. Do not auto-connect.
     if (_found.isEmpty && _ready) {
       _log('APP RESUMED: retrying BLE discovery (no camera command)');
-      _rawBleScan();
+      _scan();
     }
   }
 
@@ -104,29 +108,27 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
     setState(() => _scanPhase = 'Scanning nearby BLE devices');
     ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
       phase: 'Scanning nearby BLE devices', discoveryPercent: 40);
-    await _rawBleScan();
-    // Always perform a separate SDK discovery pass. A raw scan can discover
-    // Bluetooth audio/other services that the OEM camera SDK cannot connect to.
-    if (mounted && _ready && _rawScanCompleted) {
-      await _sdkDiscoveryFallback();
-    }
-    // Never auto-connect based only on an advertising name or raw address.
-    // A user must explicitly choose an SDK-discovered candidate.
+    // The OEM scan is the connection-authoritative source. Run it first.
+    await _sdkDiscoveryFallback();
+    // Raw scan is diagnostics only, never a source of connectable addresses.
+    if (mounted) await _rawBleScan();
+    // Connect only an SDK-discovered V03 target; verify success using SDK event.
     if (mounted && _oemFound.isNotEmpty) {
-      _log('OEM candidates found=${_oemFound.length}; V03 auto-connect eligible');
+      _log('OEM candidates found=${_oemFound.length}; checking V03 compatibility');
       await _connectKnownV03();
     }
-    if (mounted) setState(() => _scanPhase = !_rawScanCompleted
+    if (mounted) setState(() => _scanPhase = (!_rawScanCompleted && _oemFound.isEmpty)
       ? 'Discovery failed or Bluetooth permission blocked'
-      : (_connected ? 'V03 Pro SDK connected' :
+      : (_connected ? 'SDK Connected event received' :
         _connectionPhase.startsWith('Connecting') || _connectionPhase.startsWith('Awaiting') ?
           _connectionPhase :
           (_found.isEmpty ? 'No compatible candidates detected' :
-          '${_found.length} candidate(s) found — choose a glass')));
+          '${_found.length} candidate(s) found - choose a glass')));
     ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
-      phase: !_rawScanCompleted ? 'Discovery blocked / failed' :
+      phase: _connected ? 'Connected (SDK event)' :
+        (!_rawScanCompleted && _oemFound.isEmpty) ? 'Discovery blocked / failed' :
         (_found.isEmpty ? 'Scan finished; no glasses found' :
-          'Scan finished; select a discovered glass'),
+          'Scan finished; SDK candidates available'),
       discoveryPercent: _rawScanCompleted ? 100 : 40);
   }
 
@@ -158,13 +160,13 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
       _log('SDK PREFLIGHT bluetoothScan=$scanPerm bluetoothConnect=$connectPerm');
       if (!scanPerm.isGranted || !connectPerm.isGranted) {
         _log('SDK initialization blocked: allow Nearby Devices permission');
-        return;
+        throw StateError('Nearby Devices permission denied');
       }
       final result = await _device.initialize();
       final btEnabled = await _device.checkBluetoothEnable;
       if (result != true || btEnabled != true) {
         _log('NOT READY: initialization=$result, bluetooth=$btEnabled');
-        return;
+        throw StateError('OEM SDK init failed (initialize=$result bluetooth=$btEnabled)');
       }
       _subscriptions.add(_device.bleScanEveStm.listen((dynamic found) {
         final id = '${found.address}';
@@ -175,7 +177,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
           _found[id] = name;
           _selected ??= id;
         });
-        _log('Device discovered: $name'); // Don't leak MAC/address into UI logs.
+        _log('OEM SDK DEVICE: $name (connectable candidate, not yet connected)');
       }, onError: (Object err) => _log('Scan stream error: $err')));
       // SDK 1.4.0 ConnectStateBean.connectState is an INT, not the word
       // "connected". Compare to the OEM constants, never a guessed bool.
@@ -222,12 +224,12 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         _log('AI image event received (content not logged)');
       }, onError: (Object err) => _log('AI image stream error: $err')));
       setState(() => _ready = true);
-      _log('EBOLA AION device bridge initialized');
+      _log('EBOLA AION device bridge initialized; MoYoung scan listener attached');
     });
   }
 
-  // Find Glasses runs Android discovery, then always performs OEM discovery.
-  // No connection or camera command is sent by this manual diagnostic scan.
+  // Find Glasses runs OEM discovery first; Android raw discovery is diagnostics only.
+  // Scan itself never sends a camera command. Auto-connect requires OEM V03 discovery.
   // Auto-connect only to a V03 address reported by the OEM SDK.
   // Raw scanner results are never accepted as connection credentials.
   Future<void> _connectKnownV03() async {
@@ -256,23 +258,23 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
       _selected = null;
       _rawNearby.clear();
       _rawBleCount = 0;
-      _scanPhase = 'Starting raw BLE discovery';
+      _scanPhase = 'Starting OEM SDK discovery';
     });
     try {
-      await _rawBleScan();
-      // OEM discovery must run even when the generic scanner returned 0.
-      if (mounted && _ready) {
-        await _sdkDiscoveryFallback();
-        await _connectKnownV03();
-      }
+      // OEM discovery before generic Android scan prevents scanner contention.
+      await _sdkDiscoveryFallback();
+      if (mounted && _ready) await _connectKnownV03();
+      if (mounted) await _rawBleScan();
       if (mounted) {
-        setState(() => _scanPhase = _found.isNotEmpty
+        setState(() => _scanPhase = _connectionPhase.startsWith('Connecting') || _connectionPhase.startsWith('Awaiting')
+            ? _connectionPhase
+            : _found.isNotEmpty
             ? '${_found.length} compatible candidate(s) found'
-            : 'No compatible glass detected; inspect ALL BLE devices below');
+            : 'OEM scan empty; inspect Android BLE advertisements and SDK logs');
       }
     } catch (error) {
       _log('FIND GLASSES ERROR: $error');
-      if (mounted) setState(() => _scanPhase = 'BLE scan failed — check diagnostics');
+      if (mounted) setState(() => _scanPhase = 'BLE scan failed - check diagnostics');
     }
   }
 
@@ -285,7 +287,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         if (model.contains('aimb') || model.contains('g2pro')) {
           throw StateError('AIMB-G2 Pro discovered, but DZZ camera protocol is not verified. Bluetooth audio remains available.');
         }
-      if (mounted) setState(() { _connected = false; _connectionPhase = 'Connecting — waiting for SDK confirmation'; });
+      if (mounted) setState(() { _connected = false; _connectionPhase = 'Connecting - waiting for SDK confirmation'; });
       ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
         connected: false, connection: 'Awaiting SDK confirmation');
       await _device.connect(ConnectBean(address: _selected!));
@@ -297,7 +299,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
     await _run('OEM SDK discovery fallback', () async {
       _log('Requesting 10-second OEM SDK scan (separate from raw BLE)');
       if (mounted) setState(() => _scanHint =
-          'Checking OEM-compatible devices after Android BLE discovery.');
+          'Scanning for OEM-compatible glasses using the device SDK.');
       try {
         // Prevent the Android generic scanner from competing with the OEM scanner.
         await FlutterBluePlus.stopScan();
@@ -406,7 +408,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
               _scanHint = '0 BLE advertisements. Turn both glasses ON, '
                   'close their OEM apps, enable Android Location, and retry nearby.';
             } else if (_found.isEmpty) {
-              _scanHint = '${seen.length} BLE advertisers found; OEM discovery follows. '
+              _scanHint = '${seen.length} BLE advertisers found; compare with OEM candidates. '
                   'Check that the glasses advertise in pairing mode.';
             } else {
               _scanHint = '${_oemFound.length} OEM candidates available. Select a glass. '
@@ -419,6 +421,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
             'OEMCandidates=${_oemFound.length}');
       } catch (error) {
         _log('RAW BLE ERROR: $error');
+        if (mounted) setState(() => _scanHint = 'Raw BLE failed; OEM scan was attempted separately. Check SDK diagnostics.');
         rethrow;
       } finally {
         await subscription?.cancel();
@@ -481,11 +484,11 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
           _log('VOICE heard: $words');
           _speech.stop();
           if (mounted) setState(() => _voiceListening = false);
-          if (words.contains('photo') || words.contains('picture') || words.contains('à¤«à¥‹à¤Ÿà¥‹')) {
+          if (words.contains('photo') || words.contains('picture') || words.contains('फोटो')) {
             _photo();
-          } else if (words.contains('stop') && (words.contains('video') || words.contains('record')) || words.contains('à¤µà¥€à¤¡à¤¿à¤¯à¥‹ à¤¬à¤‚à¤¦')) {
+          } else if (words.contains('stop') && (words.contains('video') || words.contains('record')) || words.contains('वीडियो बंद')) {
             _stopGlassVideo();
-          } else if ((words.contains('start') || words.contains('record') || words.contains('shoot')) && words.contains('video') || words.contains('à¤µà¥€à¤¡à¤¿à¤¯à¥‹ à¤šà¤¾à¤²à¥‚')) {
+          } else if ((words.contains('start') || words.contains('record') || words.contains('shoot')) && words.contains('video') || words.contains('वीडियो चालू')) {
             _startGlassVideo();
           } else if (words.contains('camera on') || words.contains('camera open')) {
             _log('Camera ready only after BLE connect; no continuous preview API verified');
@@ -548,6 +551,32 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         final result = await _device.downloadMediaFilesToDir(targetDir: dir.path);
         _log('MEDIA IMPORT: success=${result['success']}, partial=${result['partial']}, '
             'count=${result['successCount']}, failures=${result['failCount']}');
+        // The OEM transfer result alone is not evidence of a valid JPEG.
+        // Inspect actual files and show only images physically downloaded.
+        final files = await dir.list(recursive: true, followLinks: false)
+            .where((item) => item is File)
+            .cast<File>()
+            .toList();
+        final photos = <File>[];
+        for (final file in files) {
+          final lower = file.path.toLowerCase();
+          if (!(lower.endsWith('.jpg') || lower.endsWith('.jpeg') ||
+              lower.endsWith('.png') || lower.endsWith('.webp'))) continue;
+          if (await file.length() == 0) continue;
+          photos.add(file);
+        }
+        photos.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+        if (mounted) {
+          setState(() {
+            _importedPhotos
+              ..clear()
+              ..addAll(photos);
+            _mediaStatus = photos.isEmpty
+                ? 'Transfer finished; no nonempty photo files found'
+                : '${photos.length} photo(s) imported to this phone';
+          });
+        }
+        _log('LOCAL PHOTO FILES VERIFIED: ${photos.length}');
         _log('Media stays in private temporary app storage; no upload performed');
       } catch (error) {
         _log('Media import failure: $error');
@@ -569,32 +598,62 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('EBOLA AION — Glass Camera Test')),
+    return Theme(
+      data: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: const Color(0xFFFFFFFF),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFB71C1C),
+          brightness: Brightness.light,
+        ),
+        textTheme: ThemeData.light().textTheme.apply(
+          bodyColor: const Color(0xFF161616),
+          displayColor: const Color(0xFF161616),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFB71C1C),
+            foregroundColor: Colors.white,
+            disabledBackgroundColor: const Color(0xFFE5E5E5),
+            disabledForegroundColor: const Color(0xFF555555),
+          ),
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFFB71C1C),
+          foregroundColor: Colors.white,
+        ),
+      ),
+      child: Scaffold(
+      appBar: AppBar(title: const Text('EBOLA AION - Glass Camera Test')),
       body: ListView(padding: const EdgeInsets.all(16), children: [
-        const Text('Physical smart-glasses camera only — no laptop or phone camera.'),
+        const Text('Physical smart-glasses camera only - no laptop or phone camera.'),
         const Text('Development test. Photo command sent is NOT proof of media receipt.'),
-        Card(color: const Color(0xFF160B13), child: Padding(
+        Card(color: const Color(0xFFFFF4F4), child: Padding(
           padding: const EdgeInsets.all(12), child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const Text('EBOLA AI • AUTO DEVICE TEST', style: TextStyle(
-              color: Color(0xFF39FF73), fontWeight: FontWeight.bold)),
+            const Text('EBOLA AI | AUTO DEVICE TEST', style: TextStyle(
+              color: Color(0xFFB71C1C), fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            Text(_scanPhase, style: const TextStyle(color: Colors.white)),
+            Text(_scanPhase, style: const TextStyle(color: Color(0xFF161616))),
             const SizedBox(height: 5),
             Text(_scanHint, style: const TextStyle(
-              color: Color(0xFFFFD5C5), fontSize: 12)),
+              color: Color(0xFF5B3333), fontSize: 12)),
             const SizedBox(height: 6),
-            Text('Connection: $_connectionPhase', style: const TextStyle(color: Colors.white)),
-            Text('Signal: $_signalReport', style: const TextStyle(color: Colors.white)),
+            Text('Connection: $_connectionPhase', style: const TextStyle(color: Color(0xFF161616))),
+            Text('Signal: $_signalReport', style: const TextStyle(color: Color(0xFF161616))),
             const Text('No automatic camera recording or upload. Capture requires consent.',
-              style: TextStyle(color: Color(0xFFC8B8C1), fontSize: 11)),
+              style: TextStyle(color: Color(0xFF555555), fontSize: 11)),
           ]))),
         SwitchListTile(title: const Text('Allow camera test for this session'),
           value: _cameraConsent, onChanged: (value) => setState(() => _cameraConsent = value)),
         FilledButton(onPressed: _busy || _ready ? null : _initialize, child: const Text('1. Initialize Device SDK')),
         FilledButton(onPressed: _busy || !_ready ? null : _scan, child: const Text('2. Find Glasses')),
-        DropdownButton<String>(isExpanded: true, hint: const Text('Select glass'), value: _selected,
+        DropdownButton<String>(isExpanded: true,
+          dropdownColor: Colors.white,
+          style: const TextStyle(color: Color(0xFF161616), fontSize: 16),
+          hint: const Text('Select glass', style: TextStyle(color: Color(0xFF161616))),
+          value: _selected,
           items: _found.entries.map((e) => DropdownMenuItem(value: e.key,
             child: Text(e.value.isEmpty ? 'EBOLA AION Glass' : e.value))).toList(),
           onChanged: (v) => setState(() => _selected = v)),
@@ -629,13 +688,26 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         for (final entry in _rawNearby.entries)
           Text(entry.value, style: const TextStyle(fontSize: 12)),
         Text('OEM SDK candidates: ${_oemFound.length} (only these can connect)'),
+        const Text('SDK scan is authoritative. Raw advertisements do not prove SDK compatibility.'),
         FilledButton(onPressed: _busy || !_ready ? null : _scan,
           child: const Text('RETRY FULL BLE DISCOVERY (raw + OEM)')),
         FilledButton(onPressed: _busy || _selected == null ? null : _connect, child: const Text('3. Connect Glass')),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _photo,
-          child: const Text('4. SHOOT PHOTO — GLASS CAMERA')),
+          child: const Text('4. SHOOT PHOTO - GLASS CAMERA')),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _importMedia,
           child: const Text('5. Download Glass Photo / Video')),
+        const SizedBox(height: 12),
+        Text('PHOTO DISPLAY  |  $_mediaStatus',
+          style: const TextStyle(color: Color(0xFF161616), fontWeight: FontWeight.bold)),
+        if (_importedPhotos.isEmpty)
+          const Text('Connect Glass, allow camera test, take a photo, then tap Download Glass Photo / Video.'),
+        for (final photo in _importedPhotos.take(10))
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Image.file(photo, height: 240, fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) =>
+                const Text('Downloaded file cannot be decoded as an image')),
+          ),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _voiceCommand,
           child: Text(_voiceListening ? 'VOICE LISTENING...' : 'VOICE: TAKE PHOTO / START VIDEO / STOP VIDEO')),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _startGlassVideo,
@@ -647,6 +719,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         const Text('Device diagnostics', style: TextStyle(fontWeight: FontWeight.bold)),
         for (final event in _events) SelectableText(event, style: const TextStyle(fontSize: 12)),
       ]),
+      ),
     );
   }
 }

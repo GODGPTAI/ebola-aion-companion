@@ -63,3 +63,47 @@ _content = re.sub(r'android:label="[^"]*"', 'android:label="EBOLA AI"', _content
 manifest.write_text(_content,encoding='utf-8')
 ET.parse(manifest)
 print('PASS EBOLA AI launcher label and original-logo icon preparation')
+
+
+# EBOLA_V03_ANDROID_POSTPREP_V1: reassert BLE manifest/minSdk requirements
+# Runs after this repository's existing Android preparation logic.
+def _ebola_v03_postprepare():
+    from pathlib import Path
+    import re
+    base = Path(__file__).resolve().parent.parent
+    manifest = base / 'android/app/src/main/AndroidManifest.xml'
+    if not manifest.is_file():
+        raise RuntimeError('V03: AndroidManifest.xml missing after prepare_android.py')
+    xml = manifest.read_text(encoding='utf-8')
+    if '<manifest' not in xml or '<application' not in xml:
+        raise RuntimeError('V03: Unexpected manifest structure, refusing rewrite')
+    required = [
+        'android.permission.BLUETOOTH',
+        'android.permission.BLUETOOTH_ADMIN',
+        'android.permission.BLUETOOTH_SCAN',
+        'android.permission.BLUETOOTH_CONNECT',
+        'android.permission.ACCESS_FINE_LOCATION',
+        'android.permission.ACCESS_COARSE_LOCATION',
+    ]
+    adds = []
+    for name in required:
+        if not re.search(r'<uses-permission\b[^>]*android:name=[\"\']' + re.escape(name) + r'[\"\']', xml):
+            adds.append('    <uses-permission android:name="' + name + '" />')
+    if adds:
+        xml = re.sub(r'(<application\b)', lambda m: '\n'.join(adds) + '\n    ' + m.group(1), xml, count=1)
+        manifest.write_text(xml, encoding='utf-8')
+    gradle_files = [base / 'android/app/build.gradle.kts', base / 'android/app/build.gradle']
+    gradle = next((p for p in gradle_files if p.exists()), None)
+    if gradle is None:
+        raise RuntimeError('V03: Android Gradle build script missing')
+    content = gradle.read_text(encoding='utf-8')
+    # Handle standard flutter create scaffold or an explicit minSdk below 24.
+    updated = re.sub(r'(minSdk(?:Version)?\s*(?:=\s*)?)(?:flutter\.minSdkVersion|(?:2[0-3]|1\d))\b',
+                     lambda m: m.group(1) + '24', content)
+    if updated == content and not re.search(r'minSdk(?:Version)?\s*(?:=\s*)?(?:24|2[5-9]|[3-9]\d)\b', content):
+        raise RuntimeError('V03: Cannot prove minSdk >= 24; inspect ' + str(gradle))
+    if updated != content:
+        gradle.write_text(updated, encoding='utf-8')
+    print('EBOLA V03: BLE manifest and minSdk >=24 prepared')
+
+_ebola_v03_postprepare()
