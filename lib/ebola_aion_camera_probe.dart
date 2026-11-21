@@ -1,4 +1,4 @@
-﻿import 'package:flutter/services.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -26,6 +26,10 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
   final Map<String, String> _found = <String, String>{};
   // Unfiltered raw BLE observations for troubleshooting only; not OEM connect targets.
   final Map<String, String> _rawNearby = <String, String>{};
+  // EBOLA independent BLE inspector: advertisement metadata only.
+  // Does not connect to a raw device and does not copy third-party scanner code.
+  final Map<String, String> _rawMetadata = <String, String>{};
+  String _rawInspectorStatus = 'Not scanned';
   // OEM SDK discoveries are the only connectable candidates.
   // Raw BLE advertisements are observations, not verified SDK targets.
   final Map<String, String> _oemFound = <String, String>{};
@@ -119,6 +123,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
       _oemFound.clear();
       _selected = null;
       _rawNearby.clear();
+      _rawMetadata.clear();
       _rawBleCount = 0;
     });
     ebolaGlassStatus.value = ebolaGlassStatus.value.copyWith(
@@ -333,11 +338,27 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
     });
   }
 
+  // Independent BLE inspector works even when OEM initialization fails.
+  // It uses the existing FlutterBluePlus package, not an external app.
+  Future<void> _inspectBleAdvertisements() async {
+    if (_busy) {
+      _log('BLE INSPECTOR: another operation is in progress');
+      return;
+    }
+    if (mounted) setState(() => _rawInspectorStatus = 'Scanning nearby BLE devices');
+    await _rawBleScan();
+  }
+
   Future<void> _rawBleScan() async {
     _rawScanCompleted = false;
     await _run('Raw BLE scan', () async {
       final seen = <String>{};
-      if (mounted) setState(() => _rawNearby.clear());
+      if (mounted) setState(() {
+        _rawNearby.clear();
+        _rawMetadata.clear();
+        _rawBleCount = 0;
+        _rawInspectorStatus = 'Scanning nearby BLE devices';
+      });
       StreamSubscription<List<ScanResult>>? subscription;
       try {
         setState(() {
@@ -380,8 +401,18 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
             // Repeated advertisements may gain a name later: update the record.
             // Display ALL advertisements, even unnamed ones. This list is
             // diagnostic only; never auto-connect to these raw addresses.
+            // Show only advertised metadata (not MACs or advertising payload bytes).
+            // Device keys are internal to the view; they are never printed to logs.
+            final services = adv.serviceUuids.map((uuid) => uuid.toString()).toList();
+            final companyIds = adv.manufacturerData.keys.toList()..sort();
+            final metadata = 'Services: ${services.isEmpty ? "none advertised" : services.take(8).join(", ")} '
+                '| Manufacturer IDs: ${companyIds.isEmpty ? "none" : companyIds.take(8).join(", ")}';
             if (mounted) {
-              setState(() => _rawNearby[id] = '$name  |  ${result.rssi} dBm');
+              setState(() {
+                _rawNearby[id] = '$name  |  ${result.rssi} dBm';
+                _rawMetadata[id] = metadata;
+                _rawBleCount = seen.length;
+              });
             }
             final lower = name.toLowerCase();
             if (lower.contains('v03') || lower.contains('aimb') ||
@@ -434,9 +465,12 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
           });
         }
         _rawScanCompleted = true;
+        if (mounted) setState(() => _rawInspectorStatus =
+            'Scan finished: ${seen.length} unique BLE advertisers');
         _log('RAW BLE SCAN COMPLETE uniqueDevices=${seen.length} '
             'OEMCandidates=${_oemFound.length}');
       } catch (error) {
+        if (mounted) setState(() => _rawInspectorStatus = 'Scan failed: $error');
         _log('RAW BLE ERROR: $error');
         if (mounted) setState(() => _scanHint = 'Raw BLE failed; OEM scan was attempted separately. Check SDK diagnostics.');
         rethrow;
@@ -698,12 +732,29 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
           ),
         ),
         const SizedBox(height: 8),
+        const Divider(),
+        const Text('EBOLA AI - INDEPENDENT BLE INSPECTOR',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFB71C1C), fontSize: 16)),
+        const Text('Built into EBOLA AI. Shows BLE advertisements only; no other app required.',
+          style: TextStyle(fontSize: 12, color: Color(0xFF444444))),
+        FilledButton.icon(
+          onPressed: _busy ? null : _inspectBleAdvertisements,
+          icon: const Icon(Icons.bluetooth_searching),
+          label: const Text('SCAN ALL NEARBY BLE DEVICES')),
+        Text(_rawInspectorStatus, style: const TextStyle(color: Color(0xFF161616))),
         Text('ALL BLE ADVERTISEMENTS (${_rawNearby.length})',
-          style: const TextStyle(fontWeight: FontWeight.bold)),
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF161616))),
         if (_rawNearby.isEmpty)
-          const Text('No BLE advertisements received yet. Check Nearby devices permission and Bluetooth.'),
+          const Text('No BLE advertisements yet. Scan with Glass ON and Bluetooth/Nearby Devices enabled.'),
         for (final entry in _rawNearby.entries)
-          Text(entry.value, style: const TextStyle(fontSize: 12)),
+          Card(color: const Color(0xFFFFF7F7), child: Padding(
+            padding: const EdgeInsets.all(10), child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(entry.value, style: const TextStyle(
+                  fontWeight: FontWeight.w600, color: Color(0xFF161616))),
+                Text(_rawMetadata[entry.key] ?? 'No advertising metadata',
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF444444))),
+              ]))),
         Text('OEM SDK candidates: ${_oemFound.length} (only these can connect)'),
         const Text('SDK scan is authoritative. Raw advertisements do not prove SDK compatibility.'),
         FilledButton(onPressed: _busy || !_ready ? null : _scan,
