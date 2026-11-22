@@ -33,6 +33,9 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
   // OEM SDK discoveries are the only connectable candidates.
   // Raw BLE advertisements are observations, not verified SDK targets.
   final Map<String, String> _oemFound = <String, String>{};
+  // EBOLA_V03_SCAN_EVIDENCE_V1: diagnostic counts are not connection proof.
+  int _oemScanEvents = 0;
+  String _oemScanAcceptance = 'Not requested';
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   String? _selected;
   bool _ready = false;
@@ -121,6 +124,8 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
       _scanHint = 'SDK scanning first; RAW BLE is diagnostic fallback only.';
       _found.clear();
       _oemFound.clear();
+      _oemScanEvents = 0;
+      _oemScanAcceptance = 'Not requested';
       _selected = null;
       _rawNearby.clear();
       _rawMetadata.clear();
@@ -130,7 +135,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
       phase: 'OEM SDK scanning', discoveryPercent: 40);
     await _sdkDiscoveryFallback();
     if (!mounted) return;
-    _log('DISCOVERY RESULT: OEM candidates=${_oemFound.length}');
+    _log('DISCOVERY RESULT: OEM candidates=${_oemFound.length}; OEM events=$_oemScanEvents; scan request=$_oemScanAcceptance');
     if (_oemFound.isNotEmpty) {
       // Scan has finished, so the busy guard no longer suppresses connect().
       await _connectKnownV03();
@@ -198,8 +203,9 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
       _subscriptions.add(_device.bleScanEveStm.listen((dynamic found) {
         final id = '${found.address}';
         final name = '${found.name}';
-        if (!mounted || id.isEmpty) return;
+        if (!mounted || id.isEmpty || id == 'null') return;
         setState(() {
+          _oemScanEvents++;
           _oemFound[id] = name;
           _found[id] = name;
           _selected ??= id;
@@ -337,12 +343,19 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         // Prevent the Android generic scanner from competing with the OEM scanner.
         await FlutterBluePlus.stopScan();
         final started = await _device.startScan(10);
-        _log('OEM SDK SCAN request=$started');
+        if (mounted) setState(() => _oemScanAcceptance = '$started');
+        _log('OEM SDK SCAN request=$started; listener attached=$_ready');
         if (started != true) {
           _log('OEM SDK SCAN DID NOT START: SDK returned $started');
         }
         await Future<void>.delayed(const Duration(seconds: 11));
-        _log('OEM SDK SCAN finished; OEM candidates=${_oemFound.length}');
+        _log('OEM SDK SCAN finished; OEM candidates=${_oemFound.length}; '
+            'callbacks=$_oemScanEvents; request=$_oemScanAcceptance');
+        if (started == true && _oemScanEvents == 0) {
+          _log('OEM DIAGNOSIS: scan accepted but zero discovery events. '
+              'V03 protocol compatibility unverified; RAW advertisements '
+              'are not OEM devices. No camera command sent.');
+        }
       } catch (error) {
         _log('OEM SDK SCAN ERROR: $error');
       }
