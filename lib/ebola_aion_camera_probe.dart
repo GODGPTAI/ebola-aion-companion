@@ -1,3 +1,4 @@
+import 'ebola_gatt_inspector.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:speech_to_text/speech_to_text.dart';
@@ -703,6 +704,17 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         ),
       ),
       child: Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'ebola-gatt-inspector-launch',
+        backgroundColor: const Color(0xFFD00016),
+        foregroundColor: Colors.white,
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const EbolaGattInspectorPage()),
+        ),
+        icon: const Icon(Icons.bluetooth_searching),
+        label: const Text('GATT INSPECT'),
+      ),
+
       appBar: AppBar(title: const Text('EBOLA AION - Glass Camera Test')),
       body: ListView(padding: const EdgeInsets.all(16), children: [
         const Text('Physical smart-glasses camera only - no laptop or phone camera.'),
