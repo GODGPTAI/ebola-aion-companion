@@ -1,4 +1,5 @@
 import 'ebola_gatt_inspector.dart';
+import 'ebola_media_preview.dart'; // EBOLA_CAMERA_MEDIA_V1
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:speech_to_text/speech_to_text.dart';
@@ -49,6 +50,7 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
   bool _cameraConsent = false;
   // Imported photos remain local to the phone; no server upload.
   final List<File> _importedPhotos = <File>[];
+  final List<File> _importedVideos = <File>[];
   String _mediaStatus = 'No photos imported yet';
   // EBOLA_V03_VOICE_VIDEO_V1: local UI state, NOT device capture acknowledgement.
   final SpeechToText _speech = SpeechToText();
@@ -637,26 +639,35 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
             .cast<File>()
             .toList();
         final photos = <File>[];
+        final videos = <File>[];
         for (final file in files) {
           final lower = file.path.toLowerCase();
-          if (!(lower.endsWith('.jpg') || lower.endsWith('.jpeg') ||
-              lower.endsWith('.png') || lower.endsWith('.webp'))) continue;
+          final photo = lower.endsWith('.jpg') || lower.endsWith('.jpeg') ||
+              lower.endsWith('.png') || lower.endsWith('.webp');
+          final video = lower.endsWith('.mp4') || lower.endsWith('.mov') ||
+              lower.endsWith('.m4v') || lower.endsWith('.3gp');
+          if (!photo && !video) continue;
           if (await file.length() == 0) continue;
-          photos.add(file);
+          if (photo) photos.add(file);
+          if (video) videos.add(file);
         }
         photos.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+        videos.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
         if (mounted) {
           setState(() {
             _importedPhotos
               ..clear()
               ..addAll(photos);
-            _mediaStatus = photos.isEmpty
-                ? 'Transfer finished; no nonempty photo files found'
-                : '${photos.length} photo(s) imported to this phone';
+            _importedVideos
+              ..clear()
+              ..addAll(videos);
+            _mediaStatus = photos.isEmpty && videos.isEmpty
+                ? 'Transfer finished; no nonempty supported photo/video files found'
+                : '${photos.length} photo(s), ${videos.length} video(s) found in local app cache';
           });
         }
-        _log('LOCAL PHOTO FILES VERIFIED: ${photos.length}');
-        _log('Media stays in private temporary app storage; no upload performed');
+        _log('LOCAL MEDIA FILES PRESENT: photos=${photos.length}, videos=${videos.length}; decoding not yet guaranteed');
+        _log('Media remains in temporary app storage and may be deleted by Android; no upload performed');
       } catch (error) {
         _log('Media import failure: $error');
         rethrow;
@@ -804,24 +815,36 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _importMedia,
           child: const Text('5. Download Glass Photo / Video')),
         const SizedBox(height: 12),
-        Text('PHOTO DISPLAY  |  $_mediaStatus',
+        Text('GLASS PHOTO / VIDEO GALLERY  |  $_mediaStatus',
           style: const TextStyle(color: Color(0xFF161616), fontWeight: FontWeight.bold)),
-        if (_importedPhotos.isEmpty)
-          const Text('Connect Glass, allow camera test, take a photo, then tap Download Glass Photo / Video.'),
-        for (final photo in _importedPhotos.take(10))
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Image.file(photo, height: 240, fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) =>
-                const Text('Downloaded file cannot be decoded as an image')),
-          ),
+        const Text('Only real nonempty transferred files are listed. Videos are validated by the phone player on opening. Temporary app cache is not permanent storage.',
+          style: TextStyle(fontSize: 12)),
+        if (_importedPhotos.isEmpty && _importedVideos.isEmpty)
+          const Text('Connect a camera-compatible glass, grant consent, capture media, then import. A GATT connection alone does not enable OEM camera commands.'),
+        for (final photo in _importedPhotos.take(20))
+          Card(child: ListTile(
+            leading: const Icon(Icons.photo),
+            title: Text(photo.uri.pathSegments.last),
+            subtitle: const Text('Local photo · tap to preview'),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => EbolaMediaPreview(file: photo, isVideo: false))),
+          )),
+        for (final video in _importedVideos.take(20))
+          Card(child: ListTile(
+            leading: const Icon(Icons.videocam),
+            title: Text(video.uri.pathSegments.last),
+            subtitle: const Text('Local video · tap to play'),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => EbolaMediaPreview(file: video, isVideo: true))),
+          )),
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _voiceCommand,
           child: Text(_voiceListening ? 'VOICE LISTENING...' : 'VOICE: TAKE PHOTO / START VIDEO / STOP VIDEO')),
-        FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _startGlassVideo,
+        FilledButton(onPressed: _busy || !_connected || !_cameraConsent || _videoCommandSent ? null : _startGlassVideo,
           child: const Text('START GLASS VIDEO (up to 60 s request)')),
-        FilledButton(onPressed: _busy || !_connected || !_cameraConsent ? null : _stopGlassVideo,
+        FilledButton(onPressed: _busy || !_connected || !_cameraConsent || !_videoCommandSent ? null : _stopGlassVideo,
           child: const Text('STOP GLASS VIDEO')),        const SizedBox(height: 12),
-        const Text('Voice/photo/video are device commands, not proof of capture. Production Vault upload NOT ENABLED. LED is firmware controlled.'),
+        Text(_videoCommandSent ? 'Video START requested; firmware recording not yet confirmed' : 'Video command inactive'),
+        const Text('Voice/photo/video are OEM device commands, not proof of capture. GATT-only connections do not enable OEM camera support. Production Vault upload NOT ENABLED. LED is firmware controlled.'),
         const Divider(),
         const Text('Device diagnostics', style: TextStyle(fontWeight: FontWeight.bold)),
         for (final event in _events) SelectableText(event, style: const TextStyle(fontSize: 12)),
