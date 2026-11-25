@@ -34,7 +34,11 @@ jobs:
           echo 'Camera methods:'
           grep -nE 'startScan\(|bleScanEveStm|connect\(ConnectBean|takePhoto\(|startVideo\(|stopVideo\(|downloadMediaFilesToDir' lib/ebola_aion_camera_probe.dart
       - name: Restore Flutter dependencies
-        run: flutter pub get
+        run: |
+          cd packages/ebola_wearable_sdk
+          dart pub get
+          cd ../..
+          flutter pub get
       - name: Native SDK package inspection
         shell: bash
         run: |
