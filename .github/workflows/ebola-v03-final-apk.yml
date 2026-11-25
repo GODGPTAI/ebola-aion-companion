@@ -1,0 +1,62 @@
+name: EBOLA V03 APK - consolidated build and SDK audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [glass-camera-integration]
+    paths:
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/ebola-v03-final-apk.yml'
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Source and SDK audit
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "Flutter: $(flutter --version | head -1)"
+          echo 'SDK dependency:'
+          grep -nE 'moyoung_glasses_ble_plugin|flutter_blue_plus|permission_handler' pubspec.yaml
+          echo 'Camera methods:'
+          grep -nE 'startScan\(|bleScanEveStm|connect\(ConnectBean|takePhoto\(|startVideo\(|stopVideo\(|downloadMediaFilesToDir' lib/ebola_aion_camera_probe.dart
+      - name: Restore Flutter dependencies
+        run: flutter pub get
+      - name: Native SDK package inspection
+        shell: bash
+        run: |
+          echo 'SDK package metadata:'
+          find "$HOME/.pub-cache" -iname '*moyoung*' -print | head -30
+          echo 'Native references:'
+          grep -RniE 'ScanFilter|ScanCallback|startScan|manufacturer|onScanResult' "$HOME/.pub-cache/hosted/pub.dev/moyoung_glasses_ble_plugin-1.4.0/android" 2>/dev/null | head -90 || true
+      - name: Generate Android host if repository has none
+        shell: bash
+        run: |
+          if [ ! -d android ]; then
+            echo 'Android host absent in repository; generating standard Flutter Android shell for CI build'
+            flutter create --platforms=android --project-name ebola_aion_companion .
+          fi
+      - name: Static analysis
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - name: Build Android debug APK
+        run: flutter build apk --debug
+      - name: Upload APK only after successful build
+        uses: actions/upload-artifact@v4
+        with:
+          name: EBOLA_V03_Debug_APK_NOT_HARDWARE_VERIFIED
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
