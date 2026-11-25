@@ -33,13 +33,39 @@ class _EbolaGattInspectorPageState extends State<EbolaGattInspectorPage> {
     super.dispose();
   }
 
+  /// BLE advertisements can omit the name even if the same glass was named
+  /// in an earlier scan. This is a *candidate*, never OEM authentication.
+  String _candidateName(ScanResult result) {
+    final adv = result.advertisementData.advName.trim();
+    if (adv.isNotEmpty) return adv;
+    return result.device.platformName.trim();
+  }
+
+  bool _isV03Candidate(ScanResult result) {
+    final name = _candidateName(result).toLowerCase();
+    final nameMatches = name == 'v03 pro' || name == 'v03pro' ||
+        name == 'aimb-g2 pro' || name == 'aimb-g2pro';
+    // 61679 was OBSERVED on this user's V03 Pro, not a universal vendor ID.
+    // It only marks a provisional candidate. GATT is still inspected safely.
+    return nameMatches || result.advertisementData.manufacturerData.containsKey(61679);
+  }
+
+  String _candidateLabel(ScanResult result) {
+    final name = _candidateName(result);
+    if (name.isNotEmpty) return name;
+    if (result.advertisementData.manufacturerData.containsKey(61679)) {
+      return 'Possible V03 Pro (unverified)';
+    }
+    return '(unknown)';
+  }
+
   /// One action: scan, uniquely identify V03 Pro, connect, read GATT and battery.
   /// Never connects to an unnamed or ambiguous device automatically.
   Future<void> _oneTapConnect() async {
     if (_busy) return;
     setState(() {
       _busy = true;
-      _status = 'One-tap: scanning for V03 Pro…';
+      _status = 'One-tap: scanning V03 name + observed manufacturer marker…';
       _found.clear();
       _services = [];
       _batteryLabel = 'Not checked';
@@ -59,16 +85,13 @@ class _EbolaGattInspectorPageState extends State<EbolaGattInspectorPage> {
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
       await Future<void>.delayed(const Duration(seconds: 12, milliseconds: 250));
       await FlutterBluePlus.stopScan();
-      final matches = _found.values.where((r) {
-        final name = r.advertisementData.advName.trim().toLowerCase();
-        return name == 'v03 pro';
-      }).toList();
+      final matches = _found.values.where(_isV03Candidate).toList();
       if (matches.length == 1) {
         match = matches.single;
       } else if (mounted) {
         setState(() => _status = matches.isEmpty
-            ? 'V03 Pro not found. Check power and Bluetooth; no device connected.'
-            : '${matches.length} V03 Pro devices found. Select yours below; automatic connection blocked.');
+            ? 'V03 Pro not found in this scan. Turn on/restart glass, disconnect other apps, and retry. No GATT connection.'
+            : '${matches.length} possible V03 devices found. Select the correct glass below; auto-connect blocked.');
       }
     } catch (e) {
       if (mounted) setState(() => _status = 'Auto scan failed: ${e.runtimeType}');
@@ -94,7 +117,7 @@ class _EbolaGattInspectorPageState extends State<EbolaGattInspectorPage> {
       });
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
       await Future<void>.delayed(const Duration(seconds: 12, milliseconds: 250));
-      if (mounted) setState(() => _status = 'Scan complete: ${_found.length} advertisers. Select V03 Pro to inspect GATT.');
+      if (mounted) setState(() => _status = 'Scan complete: ${_found.length} BLE advertisers, ${_found.values.where(_isV03Candidate).length} V03 candidates. Select your glass to inspect GATT.');
     } catch (e) {
       if (mounted) setState(() => _status = 'Scan error: ${e.runtimeType}');
     } finally {
@@ -145,7 +168,7 @@ class _EbolaGattInspectorPageState extends State<EbolaGattInspectorPage> {
       if (mounted) setState(() {
         _services = services;
         _batteryLabel = battery;
-        _status = 'GATT CONNECTED — ${services.length} services discovered. OEM camera protocol not verified.';
+        _status = 'GATT CONNECTED — ${services.length} services discovered. BLE only; OEM camera NOT connected.';
       });
     } catch (e) {
       if (mounted) setState(() => _status = 'GATT connection/discovery failed: ${e.runtimeType}. OEM compatibility not proven.');
@@ -156,18 +179,17 @@ class _EbolaGattInspectorPageState extends State<EbolaGattInspectorPage> {
 
   @override
   Widget build(BuildContext context) {
-    final found = _found.values.toList()
-      ..sort((a, b) {
-        final aName = a.advertisementData.advName.toLowerCase().contains('v03') ? 1 : 0;
-        final bName = b.advertisementData.advName.toLowerCase().contains('v03') ? 1 : 0;
-        return bName.compareTo(aName);
-      });
+    // Show only named V03 candidates / the observed V03 manufacturer marker.
+    // Do not present unrelated phones, earbuds or watches as glasses.
+    final found = _found.values.where(_isV03Candidate).toList()
+      ..sort((a, b) => b.rssi.compareTo(a.rssi));
     return Scaffold(
       appBar: AppBar(title: const Text('EBOLA AI · GATT Inspector'), backgroundColor: const Color(0xFFD00016), foregroundColor: Colors.white),
       body: ListView(padding: const EdgeInsets.all(16), children: [
         const Text('Built-in BLE diagnostics · read only', style: TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         const Text('No OEM authentication, camera capture, characteristic writes or pairing bypass. Disconnects on exit.'),
+        const Text('Candidate filter: V03 Pro name or previously observed manufacturer ID 61679. Other BLE devices hidden.'),
         const SizedBox(height: 12),
         FilledButton.icon(onPressed: _busy ? null : _oneTapConnect, icon: const Icon(Icons.link), label: const Text('ONE TAP CONNECT V03 PRO')),
         const SizedBox(height: 8),
@@ -177,7 +199,7 @@ class _EbolaGattInspectorPageState extends State<EbolaGattInspectorPage> {
         Text('Glass battery: $_batteryLabel'),
         const Divider(),
         ...found.map((result) {
-          final name = result.advertisementData.advName.isNotEmpty ? result.advertisementData.advName : '(unnamed)';
+          final name = _candidateLabel(result);
           final ids = result.advertisementData.manufacturerData.keys.join(', ');
           return Card(child: ListTile(
             title: Text(name),
