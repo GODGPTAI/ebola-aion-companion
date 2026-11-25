@@ -1,6 +1,5 @@
 import 'ebola_gatt_inspector.dart';
 import 'ebola_media_preview.dart'; // EBOLA_CAMERA_MEDIA_V1
-import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -56,6 +55,8 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
   final SpeechToText _speech = SpeechToText();
   bool _voiceListening = false;
   bool _videoCommandSent = false;
+  int _imageEventsReceived = 0;
+  int _actionResultsReceived = 0;
   String _connectionPhase = 'Not connected';
   String _signalReport = '-- dBm';
   String _scanPhase = 'Idle';
@@ -262,10 +263,12 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         _log('OEM ACK ERROR: code=${event['code']} action=${event['action']}');
       }, onError: (Object err) => _log('OEM ACK stream error: $err')));
       _subscriptions.add(_device.actionResultEveStm.listen((dynamic event) {
-        _log('Device action result: ${event['action']} code=${event['code']}');
+        _actionResultsReceived++;
+        _log('OEM action result #$_actionResultsReceived: ${event['action']} code=${event['code']} (not capture proof)');
       }, onError: (Object err) => _log('Action stream error: $err')));
       _subscriptions.add(_device.aiImageDataEveStm.listen((dynamic image) {
-        _log('AI image event received (content not logged)');
+        _imageEventsReceived++;
+        _log('OEM image event #$_imageEventsReceived received; payload type=${image.runtimeType}; file not saved/validated');
       }, onError: (Object err) => _log('AI image stream error: $err')));
       setState(() => _ready = true);
       _log('EBOLA AION device bridge initialized; MoYoung scan listener attached');
@@ -611,9 +614,8 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
       }
       _log('Sending physical glass photo command');
       await _device.takePhoto(photoMode: 0);
-      await SystemSound.play(SystemSoundType.click);
-      _log('PHONE SHUTTER CLICK REQUESTED');
-      _log('PHOTO COMMAND SENT; capture and import NOT yet verified');
+      // A phone shutter click misrepresents an unconfirmed glasses capture.
+      _log('PHOTO COMMAND SENT TO OEM SDK; await action ACK and actual imported file');
     });
   }
 
@@ -844,6 +846,8 @@ class _EbolaAionCameraProbeState extends State<EbolaAionCameraProbe> with Widget
         FilledButton(onPressed: _busy || !_connected || !_cameraConsent || !_videoCommandSent ? null : _stopGlassVideo,
           child: const Text('STOP GLASS VIDEO')),        const SizedBox(height: 12),
         Text(_videoCommandSent ? 'Video START requested; firmware recording not yet confirmed' : 'Video command inactive'),
+        Text('OEM camera: ${_connected ? 'SDK Connected event received' : 'NOT CONNECTED'}; SDK candidates=${_oemFound.length}; image events=$_imageEventsReceived; action results=$_actionResultsReceived',
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFB71C1C))),
         const Text('Voice/photo/video are OEM device commands, not proof of capture. GATT-only connections do not enable OEM camera support. Production Vault upload NOT ENABLED. LED is firmware controlled.'),
         const Divider(),
         const Text('Device diagnostics', style: TextStyle(fontWeight: FontWeight.bold)),
