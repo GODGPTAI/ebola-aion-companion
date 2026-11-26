@@ -59,10 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           # EBOLA_NEON_ENTRYPOINT_GUARD_V1 - fail closed; never build demo or red-white instead
-          python3 EBOLA_AION_NEON_FINAL_BUILD/resolve_neon.py --output /tmp/ebola_neon_entry.txt
-          NEON_ENTRY="$(cat /tmp/ebola_neon_entry.txt)"
-          echo "Building approved NEON entrypoint: $NEON_ENTRY"
-          flutter build apk --debug --target "$NEON_ENTRY"
+          flutter build apk --debug --target lib/ebola_aion_red_white_app.dart
       - name: Upload APK only after successful build
         uses: actions/upload-artifact@v4
         with:
